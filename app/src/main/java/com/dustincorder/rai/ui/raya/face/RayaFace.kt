@@ -163,8 +163,8 @@ private fun DrawScope.drawDisplayFace(
         else -> height * 0.065f
     } * eyePulse
     val eyeWidth = if (state.emotion == RayaFaceEmotion.Surprised || state.gaze == RayaGaze.Wide) width * 0.13f else width * 0.115f
-    drawPixelEye(width * (0.35f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion)
-    drawPixelEye(width * (0.65f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion)
+    drawPixelEye(width * (0.35f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion, blinking)
+    drawPixelEye(width * (0.65f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion, blinking)
 
     when (state.emotion) {
         RayaFaceEmotion.Thinking -> drawThinkingPattern(width, height, eyeColor, thinkingSweep)
@@ -174,8 +174,17 @@ private fun DrawScope.drawDisplayFace(
     }
 }
 
-private fun DrawScope.drawPixelEye(x: Float, y: Float, eyeWidth: Float, eyeHeight: Float, color: Color, emotion: RayaFaceEmotion) {
+private fun DrawScope.drawPixelEye(
+    x: Float,
+    y: Float,
+    eyeWidth: Float,
+    eyeHeight: Float,
+    color: Color,
+    emotion: RayaFaceEmotion,
+    blinking: Boolean,
+) {
     drawRect(color, point(x - eyeWidth / 2f, y - eyeHeight / 2f), dimensions(eyeWidth, eyeHeight.coerceAtLeast(1f)))
+    if (blinking) return
     val pupilSize = eyeWidth * 0.52f
     drawRect(
         color = Color(0xFF10132D),

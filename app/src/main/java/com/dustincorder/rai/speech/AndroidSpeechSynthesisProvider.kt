@@ -13,6 +13,7 @@ import kotlin.coroutines.resumeWithException
 class AndroidSpeechSynthesisProvider(context: Context) : SpeechSynthesisProvider {
     private val ready = kotlinx.coroutines.CompletableDeferred<Unit>()
     private var activeSpeech: CancellableContinuation<Unit>? = null
+    private var activeUtteranceId: String? = null
     private var utteranceCounter = 0
 
     private val textToSpeech = TextToSpeech(context.applicationContext) { status ->
@@ -26,13 +27,13 @@ class AndroidSpeechSynthesisProvider(context: Context) : SpeechSynthesisProvider
             override fun onStart(utteranceId: String?) = Unit
 
             override fun onDone(utteranceId: String?) {
-                activeSpeech?.resume(Unit)
-                activeSpeech = null
+                completeActive(utteranceId) { it.resume(Unit) }
             }
 
             override fun onError(utteranceId: String?) {
-                activeSpeech?.resumeWithException(IllegalStateException("Ошибка синтеза речи."))
-                activeSpeech = null
+                completeActive(utteranceId) {
+                    it.resumeWithException(IllegalStateException("Ошибка синтеза речи."))
+                }
             }
         })
     }
@@ -47,8 +48,9 @@ class AndroidSpeechSynthesisProvider(context: Context) : SpeechSynthesisProvider
         }
 
         suspendCancellableCoroutine { continuation ->
-            activeSpeech = continuation
             val utteranceId = "raya-${utteranceCounter++}"
+            activeSpeech = continuation
+            activeUtteranceId = utteranceId
             val result = textToSpeech.speak(
                 text,
                 TextToSpeech.QUEUE_FLUSH,
@@ -56,12 +58,12 @@ class AndroidSpeechSynthesisProvider(context: Context) : SpeechSynthesisProvider
                 utteranceId,
             )
             if (result == TextToSpeech.ERROR) {
-                activeSpeech = null
+                clearActive(continuation, utteranceId)
                 continuation.resumeWithException(IllegalStateException("Не удалось запустить синтез речи."))
             }
             continuation.invokeOnCancellation {
-                if (activeSpeech === continuation) {
-                    activeSpeech = null
+                if (activeSpeech === continuation && activeUtteranceId == utteranceId) {
+                    clearActive(continuation, utteranceId)
                     textToSpeech.stop()
                 }
             }
@@ -71,13 +73,30 @@ class AndroidSpeechSynthesisProvider(context: Context) : SpeechSynthesisProvider
     override fun stop() {
         textToSpeech.stop()
         activeSpeech?.cancel()
-        activeSpeech = null
+        clearActive()
     }
 
     override fun shutdown() {
         textToSpeech.stop()
         textToSpeech.shutdown()
         activeSpeech?.cancel()
-        activeSpeech = null
+        clearActive()
+    }
+
+    private fun completeActive(utteranceId: String?, completion: (CancellableContinuation<Unit>) -> Unit) {
+        if (utteranceId == null || utteranceId != activeUtteranceId) return
+        val continuation = activeSpeech ?: return
+        clearActive()
+        completion(continuation)
+    }
+
+    private fun clearActive(
+        continuation: CancellableContinuation<Unit>? = null,
+        utteranceId: String? = null,
+    ) {
+        if (continuation == null || (activeSpeech === continuation && activeUtteranceId == utteranceId)) {
+            activeSpeech = null
+            activeUtteranceId = null
+        }
     }
 }
