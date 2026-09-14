@@ -23,7 +23,6 @@ class MainActivity : ComponentActivity() {
             RayaTheme {
                 RayaScreen(
                     state = uiState,
-                    onTalkClick = viewModel::startDemo,
                 )
             }
         }
