@@ -1,52 +1,116 @@
 package com.dustincorder.rai.domain
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import java.util.Locale
 
 class RayaOrchestrator(
     private val scope: CoroutineScope,
-    private val listeningDelayMs: Long = 700L,
-    private val thinkingDelayMs: Long = 900L,
-    private val speakingDelayMs: Long = 1_600L,
+    private val speechRecognition: SpeechRecognitionProvider,
+    private val speechSynthesis: SpeechSynthesisProvider,
+    private val replyProvider: ReplyProvider,
 ) {
     private val _state = MutableStateFlow<RayaState>(RayaState.Idle)
     val state: StateFlow<RayaState> = _state.asStateFlow()
 
-    private var demoJob: Job? = null
+    private val _userText = MutableStateFlow("")
+    val userText: StateFlow<String> = _userText.asStateFlow()
 
-    fun startMockDemo() {
-        demoJob?.cancel()
-        demoJob = scope.launch {
+    private var voiceJob: Job? = null
+
+    fun startVoiceFlow(locale: Locale = Locale("ru", "RU")) {
+        if (voiceJob?.isActive == true) return
+        if (_state.value is RayaState.Error) {
+            _state.value = RayaState.Idle
+        }
+        if (_state.value != RayaState.Idle) return
+
+        voiceJob = scope.launch {
+            val finalText = CompletableDeferred<String>()
+            val recognitionJob = launch {
+                speechRecognition.events.collect { event ->
+                    when (event) {
+                        is SpeechRecognitionEvent.Partial -> _userText.value = event.text
+                        is SpeechRecognitionEvent.Final -> {
+                            _userText.value = event.text
+                            finalText.complete(event.text)
+                        }
+                        is SpeechRecognitionEvent.Error -> {
+                            finalText.completeExceptionally(RecognitionException(event.message))
+                        }
+                    }
+                }
+            }
+
             try {
+                _userText.value = ""
                 _state.value = RayaState.Listening
-                delay(listeningDelayMs)
+                speechRecognition.startListening(locale)
+                val recognizedText = finalText.await().trim()
+                recognitionJob.cancelAndJoin()
+
+                if (recognizedText.isEmpty()) {
+                    throw RecognitionException("Не удалось распознать речь.")
+                }
 
                 _state.value = RayaState.Thinking
-                delay(thinkingDelayMs)
-
-                _state.value = RayaState.Speaking("Я здесь. Системы работают нормально.")
-                delay(speakingDelayMs)
-
+                val response = replyProvider.reply(recognizedText)
+                _state.value = RayaState.Speaking(response)
+                speechSynthesis.speak(response, locale)
                 _state.value = RayaState.Idle
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (throwable: Throwable) {
                 _state.value = RayaState.Error(
-                    throwable.message ?: "Демонстрация завершилась с ошибкой.",
+                    throwable.message ?: "Голосовой pipeline завершился с ошибкой.",
                 )
+            } finally {
+                recognitionJob.cancel()
+                if (_state.value == RayaState.Listening) {
+                    speechRecognition.cancel()
+                }
             }
         }
     }
 
+    fun cancelListening() {
+        if (_state.value == RayaState.Listening) {
+            speechRecognition.cancel()
+            voiceJob?.cancel()
+            voiceJob = null
+            _state.value = RayaState.Idle
+        }
+    }
+
+    fun reportError(message: String) {
+        voiceJob?.cancel()
+        speechRecognition.cancel()
+        speechSynthesis.stop()
+        _state.value = RayaState.Error(message)
+    }
+
     fun reset() {
-        demoJob?.cancel()
-        demoJob = null
+        voiceJob?.cancel()
+        voiceJob = null
+        speechRecognition.cancel()
+        speechSynthesis.stop()
         _state.value = RayaState.Idle
     }
+
+    fun close() {
+        voiceJob?.cancel()
+        speechRecognition.cancel()
+        speechRecognition.release()
+        speechSynthesis.stop()
+        speechSynthesis.shutdown()
+    }
+
+    class RecognitionException(message: String) : RuntimeException(message)
 }

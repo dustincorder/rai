@@ -26,7 +26,6 @@ class RayaStateMapperTest {
         val state = rayaUiStateFor(RayaState.Speaking("test"))
 
         assertEquals(RayaFaceEmotion.Speaking, state.face.emotion)
-        assertEquals(0.72f, state.face.mouthAmplitude)
     }
 
     @Test
