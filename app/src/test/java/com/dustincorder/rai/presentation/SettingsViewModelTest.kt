@@ -122,9 +122,12 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `blank text field does not delete stored key`() = runBlocking {
+    fun `blank text field does not delete stored key in same context`() = runBlocking {
+        val context = customSettings(LlmProtocol.OpenAiCompatible, "https://host/v1")
+        repository.save(context)
         keyStore.storedKey = "saved"
-        viewModel.save(draftSettings(), "")
+
+        viewModel.save(context, "")
 
         awaitKeyStatus(viewModel, ApiKeyStatus.Configured)
         assertEquals("saved", keyStore.storedKey)
@@ -209,6 +212,61 @@ class SettingsViewModelTest {
         assertEquals(2, repository.saveCount)
     }
 
+    @Test
+    fun `provider switch to builtin then new custom endpoint deletes stale key`() = runBlocking {
+        repository.save(customSettings(LlmProtocol.OpenAiCompatible, "https://a.example/v1"))
+        keyStore.storedKey = "SECRET_A"
+        repository.save(AppSettings(provider = LlmProviderPreset.OpenAI, customBaseUrl = "https://a.example/v1"))
+
+        viewModel.save(customSettings(LlmProtocol.OpenAiCompatible, "https://b.example/v1"), "")
+        awaitTerminalStatus()
+
+        assertEquals(null, keyStore.storedKey)
+    }
+
+    @Test
+    fun `returning to same custom context after builtin keeps key`() = runBlocking {
+        repository.save(customSettings(LlmProtocol.OpenAiCompatible, "https://a.example/v1"))
+        keyStore.storedKey = "SECRET_A"
+        repository.save(AppSettings(provider = LlmProviderPreset.OpenAI, customBaseUrl = "https://a.example/v1"))
+
+        viewModel.save(customSettings(LlmProtocol.OpenAiCompatible, "https://a.example/v1"), "")
+        awaitTerminalStatus()
+
+        assertEquals("SECRET_A", keyStore.storedKey)
+    }
+
+    @Test
+    fun `new key write failure does not leak old key to new endpoint`() = runBlocking {
+        repository.save(customSettings(LlmProtocol.OpenAiCompatible, "https://a.example/v1"))
+        keyStore.storedKey = "SECRET_A"
+        keyStore.failWrite = true
+
+        viewModel.save(customSettings(LlmProtocol.OpenAiCompatible, "https://b.example/v1"), "SECRET_B")
+        val status = awaitTerminalStatus()
+
+        assertTrue(status.isError)
+        assertEquals(null, keyStore.storedKey)
+        assertEquals(1, keyStore.writeCount)
+        assertEquals(2, repository.saveCount)
+    }
+
+    @Test
+    fun `explicit delete failure surfaces error and keeps key`() = runBlocking {
+        keyStore.storedKey = "SECRET_A"
+        viewModel = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+        awaitKeyStatus(viewModel, ApiKeyStatus.Configured)
+        keyStore.failDelete = true
+
+        viewModel.deleteKey(LlmProviderPreset.Custom)
+        val status = awaitTerminalStatus()
+
+        assertTrue(status.isError)
+        assertEquals("Не удалось удалить API key.", status.message)
+        assertEquals("SECRET_A", keyStore.storedKey)
+        assertEquals(ApiKeyStatus.Configured, viewModel.apiKeyStatus.value)
+    }
+
     private suspend fun awaitTerminalStatus(): ConnectionStatus.Message {
         var message: ConnectionStatus.Message? = null
         withTimeout(11_000) {
@@ -285,6 +343,7 @@ private class TrackingApiKeyStore : ApiKeyStore {
     var storedKey: String? = null
     var failRead = false
     var failDelete = false
+    var failWrite = false
 
     override suspend fun read(provider: LlmProviderPreset): String? {
         if (failRead) throw ApiKeyStorageException("Не удалось прочитать сохранённый API key. Замените или удалите его.")
@@ -293,6 +352,7 @@ private class TrackingApiKeyStore : ApiKeyStore {
 
     override suspend fun write(provider: LlmProviderPreset, value: String) {
         writeCount++
+        if (failWrite) throw ApiKeyStorageException("Не удалось записать API key.")
         writtenKey = value
         storedKey = value
     }

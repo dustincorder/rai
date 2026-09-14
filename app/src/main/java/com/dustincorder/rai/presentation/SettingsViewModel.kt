@@ -63,7 +63,12 @@ class SettingsViewModel(
         viewModelScope.launch {
             runCatching {
                 val validated = settings.validated()
-                clearStaleCustomKey(validated, apiKey)
+                if (validated.provider == LlmProviderPreset.Custom) {
+                    val previous = repository.settings.first()
+                    if (customContextChanged(previous, validated)) {
+                        apiKeyStore.delete(LlmProviderPreset.Custom)
+                    }
+                }
                 repository.save(validated)
                 if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
             }.onSuccess {
@@ -77,9 +82,14 @@ class SettingsViewModel(
 
     fun deleteKey(provider: LlmProviderPreset) {
         viewModelScope.launch {
-            apiKeyStore.delete(provider)
-            refreshApiKeyStatus(provider)
-            connectionStatus.value = ConnectionStatus.Message("API key удалён", isError = false)
+            runCatching { apiKeyStore.delete(provider) }
+                .onSuccess {
+                    refreshApiKeyStatus(provider)
+                    connectionStatus.value = ConnectionStatus.Message("API key удалён", isError = false)
+                }
+                .onFailure {
+                    connectionStatus.value = ConnectionStatus.Message(it.message ?: "Не удалось удалить API key.", isError = true)
+                }
         }
     }
 
@@ -114,17 +124,12 @@ class SettingsViewModel(
         return normalized
     }
 
-    private suspend fun clearStaleCustomKey(settings: AppSettings, newKey: String) {
-        val previous = repository.settings.first()
-        if (previous.provider != LlmProviderPreset.Custom || settings.provider != LlmProviderPreset.Custom) return
-        if (newKey.isNotBlank()) return
+    private suspend fun customContextChanged(previous: AppSettings, next: AppSettings): Boolean {
         val endpointChanged = runCatching {
-            normalizeBaseUrl(previous.customBaseUrl) != normalizeBaseUrl(settings.customBaseUrl)
-        }.getOrDefault(previous.customBaseUrl != settings.customBaseUrl)
-        val protocolChanged = previous.customProtocol != settings.customProtocol
-        if (endpointChanged || protocolChanged) {
-            apiKeyStore.delete(LlmProviderPreset.Custom)
-        }
+            normalizeBaseUrl(previous.customBaseUrl) != normalizeBaseUrl(next.customBaseUrl)
+        }.getOrDefault(previous.customBaseUrl != next.customBaseUrl)
+        val protocolChanged = previous.customProtocol != next.customProtocol
+        return endpointChanged || protocolChanged
     }
 }
 
