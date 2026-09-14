@@ -7,12 +7,12 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
@@ -29,6 +29,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.dustincorder.rai.presentation.model.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaFaceState
+import com.dustincorder.rai.presentation.model.RayaGaze
 import com.dustincorder.rai.ui.theme.Cyan
 import com.dustincorder.rai.ui.theme.CyanSoft
 import com.dustincorder.rai.ui.theme.Danger
@@ -37,10 +40,6 @@ import com.dustincorder.rai.ui.theme.Screen
 import com.dustincorder.rai.ui.theme.Violet
 import kotlin.math.sin
 import kotlin.random.Random
-import com.dustincorder.rai.presentation.model.RayaAntennaMotion
-import com.dustincorder.rai.presentation.model.RayaFaceEmotion
-import com.dustincorder.rai.presentation.model.RayaFaceState
-import com.dustincorder.rai.presentation.model.RayaGaze
 
 @Composable
 fun RayaFace(
@@ -89,31 +88,16 @@ fun RayaFace(
         }
     }
 
-    val gazeX by animateFloatAsState(
-        targetValue = state.gaze.horizontalOffset,
-        animationSpec = tween(420),
-        label = "gaze-x",
-    )
-    val gazeY by animateFloatAsState(
-        targetValue = state.gaze.verticalOffset,
-        animationSpec = tween(420),
-        label = "gaze-y",
-    )
-    val errorOffset = if (state.emotion == RayaFaceEmotion.Error) {
-        sin(errorPulse * Math.PI * 2).toFloat() * 2.2f
-    } else {
-        0f
-    }
+    val gazeX by animateFloatAsState(state.gaze.horizontalOffset, tween(420), label = "gaze-x")
+    val gazeY by animateFloatAsState(state.gaze.verticalOffset, tween(420), label = "gaze-y")
+    val displayOffset = if (state.emotion == RayaFaceEmotion.Calm) idleDrift * 1.2f else 0f
 
     Canvas(
         modifier = modifier
             .aspectRatio(0.92f)
-            .graphicsLayer {
-                translationX = errorOffset
-                translationY = if (state.emotion == RayaFaceEmotion.Calm) idleDrift else 0f
-            },
+            .graphicsLayer { translationY = displayOffset },
     ) {
-        drawRayaFace(
+        drawDisplayFace(
             state = state,
             blinking = state.blinking || automaticBlink,
             gazeX = gazeX,
@@ -128,23 +112,19 @@ fun RayaFace(
 
 private val RayaGaze.horizontalOffset: Float
     get() = when (this) {
-        RayaGaze.Center -> 0f
-        RayaGaze.Alert -> 0f
-        RayaGaze.Up -> 0f
-        RayaGaze.Down -> 0f
+        RayaGaze.Center, RayaGaze.Up, RayaGaze.Down -> 0f
+        RayaGaze.Alert -> 0.018f
         RayaGaze.Wide -> 0f
     }
 
 private val RayaGaze.verticalOffset: Float
     get() = when (this) {
-        RayaGaze.Center -> 0f
-        RayaGaze.Alert -> 0f
+        RayaGaze.Center, RayaGaze.Alert, RayaGaze.Wide -> 0f
         RayaGaze.Up -> -0.025f
         RayaGaze.Down -> 0.025f
-        RayaGaze.Wide -> 0f
     }
 
-private fun DrawScope.drawRayaFace(
+private fun DrawScope.drawDisplayFace(
     state: RayaFaceState,
     blinking: Boolean,
     gazeX: Float,
@@ -156,90 +136,33 @@ private fun DrawScope.drawRayaFace(
 ) {
     val width = size.width
     val height = size.height
-    val metal = Color(0xFF66718D)
-    val metalLight = Color(0xFFA7B2CA)
-    val metalDark = Color(0xFF303A58)
     val eyeColor = when (state.emotion) {
         RayaFaceEmotion.Error, RayaFaceEmotion.Concerned -> Danger
         RayaFaceEmotion.Thinking, RayaFaceEmotion.Curious -> Violet
         else -> Cyan
     }
+    val displayAlpha = if (state.emotion == RayaFaceEmotion.Error) 0.88f + errorPulse * 0.12f else 1f
 
     drawRoundRect(
-        color = Color.Black.copy(alpha = 0.45f),
-        topLeft = point(width * 0.08f, height * 0.1f),
-        size = dimensions(width * 0.84f, height * 0.78f),
-        cornerRadius = radius(width * 0.06f),
-    )
-    drawLine(
-        color = metal,
-        start = point(width * 0.29f, height * 0.17f),
-        end = point(width * 0.23f, height * 0.04f),
-        strokeWidth = width * 0.025f,
-        cap = StrokeCap.Round,
-    )
-    drawLine(
-        color = metal,
-        start = point(width * 0.71f, height * 0.17f),
-        end = point(width * 0.77f, height * 0.04f),
-        strokeWidth = width * 0.025f,
-        cap = StrokeCap.Round,
-    )
-    drawAntennaBlock(width * 0.19f, height * 0.01f, metalLight)
-    drawAntennaBlock(width * 0.74f, height * 0.01f, metalLight)
-
-    val antennaLift = when (state.antennaMotion) {
-        RayaAntennaMotion.Resting -> 0f
-        RayaAntennaMotion.Responsive -> pulse * height * 0.012f
-        RayaAntennaMotion.Thinking -> sin(thinkingSweep * Math.PI * 2).toFloat() * height * 0.014f
-        RayaAntennaMotion.Alert -> height * 0.018f + errorPulse * height * 0.01f
-    }
-    drawRect(
-        color = eyeColor.copy(alpha = 0.65f),
-        topLeft = point(width * 0.19f, height * 0.01f - antennaLift),
-        size = dimensions(width * 0.07f, width * 0.045f),
-    )
-    drawRect(
-        color = eyeColor.copy(alpha = 0.65f),
-        topLeft = point(width * 0.74f, height * 0.01f + antennaLift),
-        size = dimensions(width * 0.07f, width * 0.045f),
-    )
-
-    drawRoundRect(
-        color = metalDark,
-        topLeft = point(width * 0.1f, height * 0.14f),
-        size = dimensions(width * 0.8f, height * 0.74f),
+        color = Screen.copy(alpha = displayAlpha),
+        topLeft = point(width * 0.07f, height * 0.08f),
+        size = dimensions(width * 0.86f, height * 0.84f),
         cornerRadius = radius(width * 0.045f),
     )
     drawRoundRect(
-        color = metal,
-        topLeft = point(width * 0.13f, height * 0.17f),
-        size = dimensions(width * 0.74f, height * 0.68f),
-        cornerRadius = radius(width * 0.035f),
+        color = Color(0xFF3A3970),
+        topLeft = point(width * 0.07f, height * 0.08f),
+        size = dimensions(width * 0.86f, height * 0.84f),
+        cornerRadius = radius(width * 0.045f),
         style = Stroke(width * 0.012f),
     )
-    drawSideMechanism(width, height, metalLight, pulse, state)
-
-    drawRoundRect(
-        color = Screen,
-        topLeft = point(width * 0.2f, height * 0.29f),
-        size = dimensions(width * 0.6f, height * 0.4f),
-        cornerRadius = radius(width * 0.025f),
-    )
-    drawRoundRect(
-        color = Color(0xFF31345F),
-        topLeft = point(width * 0.2f, height * 0.29f),
-        size = dimensions(width * 0.6f, height * 0.4f),
-        cornerRadius = radius(width * 0.025f),
-        style = Stroke(width * 0.008f),
-    )
-    for (line in 1..5) {
-        val y = height * 0.29f + height * 0.4f * line / 6f
+    for (line in 1..8) {
+        val y = height * 0.08f + height * 0.84f * line / 9f
         drawLine(
-            color = Color(0xFF4A4277).copy(alpha = 0.14f),
-            start = point(width * 0.2f, y),
-            end = point(width * 0.8f, y),
-            strokeWidth = width * 0.003f,
+            color = Color(0xFF514B86).copy(alpha = 0.13f),
+            start = point(width * 0.07f, y),
+            end = point(width * 0.93f, y),
+            strokeWidth = width * 0.0025f,
         )
     }
 
@@ -253,10 +176,9 @@ private fun DrawScope.drawRayaFace(
         state.emotion == RayaFaceEmotion.Error -> height * 0.06f
         else -> height * 0.065f
     }
-    val leftEyeX = width * (0.35f + gazeX)
-    val rightEyeX = width * (0.65f + gazeX)
-    drawPixelEye(leftEyeX, eyeY, width * 0.115f, eyeHeight, eyeColor, state.emotion)
-    drawPixelEye(rightEyeX, eyeY, width * 0.115f, eyeHeight, eyeColor, state.emotion)
+    val eyeWidth = if (state.gaze == RayaGaze.Wide) width * 0.13f else width * 0.115f
+    drawPixelEye(width * (0.35f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion)
+    drawPixelEye(width * (0.65f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion)
 
     when (state.emotion) {
         RayaFaceEmotion.Error -> drawErrorFace(width, height, eyeColor)
@@ -267,39 +189,12 @@ private fun DrawScope.drawRayaFace(
         RayaFaceEmotion.Concerned -> drawConcernedMouth(width, height, eyeColor)
         else -> drawCalmMouth(width, height, eyeColor, state.emotion)
     }
-    drawRect(
-        color = metalLight.copy(alpha = 0.55f),
-        topLeft = point(width * 0.2f, height * 0.75f),
-        size = dimensions(width * 0.6f, height * 0.012f),
-    )
-}
-
-private fun DrawScope.drawAntennaBlock(x: Float, y: Float, color: Color) {
-    drawRect(color, point(x, y), dimensions(size.width * 0.07f, size.width * 0.045f))
-}
-
-private fun DrawScope.drawSideMechanism(
-    width: Float,
-    height: Float,
-    color: Color,
-    pulse: Float,
-    state: RayaFaceState,
-) {
-    val glow = when (state.antennaMotion) {
-        RayaAntennaMotion.Responsive -> color.copy(alpha = 0.5f + pulse * 0.4f)
-        RayaAntennaMotion.Alert -> Danger.copy(alpha = 0.72f)
-        else -> color
-    }
-    drawRoundRect(glow, point(width * 0.04f, height * 0.39f), dimensions(width * 0.09f, height * 0.15f), radius(width * 0.015f))
-    drawRoundRect(glow, point(width * 0.87f, height * 0.39f), dimensions(width * 0.09f, height * 0.15f), radius(width * 0.015f))
-    drawRect(Color(0xFF1A213B), point(width * 0.015f, height * 0.44f), dimensions(width * 0.04f, height * 0.05f))
-    drawRect(Color(0xFF1A213B), point(width * 0.945f, height * 0.44f), dimensions(width * 0.04f, height * 0.05f))
 }
 
 private fun DrawScope.drawPixelEye(x: Float, y: Float, eyeWidth: Float, eyeHeight: Float, color: Color, emotion: RayaFaceEmotion) {
     drawRect(color, point(x - eyeWidth / 2f, y - eyeHeight / 2f), dimensions(eyeWidth, eyeHeight.coerceAtLeast(1f)))
     if (eyeHeight > 4f && emotion != RayaFaceEmotion.Error) {
-        drawRect(Color.White.copy(alpha = 0.7f), point(x - eyeWidth * 0.28f, y - eyeHeight * 0.32f), dimensions(eyeWidth * 0.16f, eyeHeight * 0.22f))
+        drawRect(Color.White.copy(alpha = 0.72f), point(x - eyeWidth * 0.28f, y - eyeHeight * 0.32f), dimensions(eyeWidth * 0.16f, eyeHeight * 0.22f))
     }
 }
 
@@ -344,7 +239,7 @@ private fun radius(value: Float) = androidx.compose.ui.geometry.CornerRadius(val
 
 @Preview(showBackground = true, backgroundColor = 0xFF080914)
 @Composable
-private fun RayaFacePlaygroundPreview() {
+private fun RayaFacePreview() {
     RayaTheme {
         Box(modifier = Modifier.fillMaxWidth().widthIn(max = 390.dp)) {
             RayaFace(state = RayaFaceState(emotion = RayaFaceEmotion.Happy))
@@ -357,16 +252,7 @@ private fun RayaFacePlaygroundPreview() {
 private fun RayaFaceExpressionGridPreview() {
     RayaTheme {
         Column {
-            listOf(
-                RayaFaceEmotion.Calm,
-                RayaFaceEmotion.Listening,
-                RayaFaceEmotion.Thinking,
-                RayaFaceEmotion.Speaking,
-                RayaFaceEmotion.Happy,
-                RayaFaceEmotion.Curious,
-                RayaFaceEmotion.Concerned,
-                RayaFaceEmotion.Error,
-            ).chunked(2).forEach { row ->
+            RayaFaceEmotion.entries.chunked(2).forEach { row ->
                 Row(modifier = Modifier.height(260.dp)) {
                     row.forEach { emotion ->
                         RayaFace(
