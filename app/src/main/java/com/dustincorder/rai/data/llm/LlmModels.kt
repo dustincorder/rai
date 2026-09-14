@@ -24,3 +24,4 @@ import java.io.IOException
 
 class LlmConfigurationException(message: String) : IllegalStateException(message)
 class LlmHttpException(val statusCode: Int, val providerMessage: String? = null) : IOException("HTTP $statusCode")
+class LlmSafeException(message: String) : RuntimeException(message)

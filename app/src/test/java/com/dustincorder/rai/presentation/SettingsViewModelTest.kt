@@ -101,7 +101,7 @@ class SettingsViewModelTest {
         assertEquals(0, repository.saveCount)
         assertEquals(0, keyStore.writeCount)
         assertTrue(status.isError)
-        assertEquals("Провайдер вернул ошибку сервера (HTTP 500).: boom", status.message)
+        assertEquals("Провайдер вернул ошибку сервера (HTTP 500): boom", status.message)
     }
 
     @Test

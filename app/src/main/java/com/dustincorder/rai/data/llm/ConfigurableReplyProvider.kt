@@ -1,12 +1,13 @@
 package com.dustincorder.rai.data.llm
 
+import android.util.Log
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.data.secrets.ApiKeyStore
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.data.settings.SettingsRepository
+import com.dustincorder.rai.data.settings.normalizeBaseUrl
 import com.dustincorder.rai.domain.ReplyProvider
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -30,14 +31,21 @@ class ConfigurableReplyProvider(
             append(systemPrompt())
             if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
         }
-        return when (settings.protocol) {
-            LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
-            LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
+        return try {
+            when (settings.protocol) {
+                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
+                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            logDiagnostics(failure, settings.connectionConfig())
+            throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
         }
     }
 
     suspend fun testConnection(config: LlmConnectionConfig, apiKey: String?): LlmConnectionResult {
-        val effectiveKey = apiKey?.takeIf { it.isNotBlank() } ?: apiKeyStore.read(config.provider)
+        val effectiveKey = resolveEffectiveKey(config, apiKey)
         if (config.baseUrl.isBlank() || config.modelId.isBlank()) {
             return LlmConnectionResult.Failure("Укажите URL и модель провайдера.")
         }
@@ -59,14 +67,28 @@ class ConfigurableReplyProvider(
         }
     }
 
-    private fun logDiagnostics(failure: Throwable, config: LlmConnectionConfig) {
+    private suspend fun resolveEffectiveKey(config: LlmConnectionConfig, apiKey: String?): String? {
+        if (!apiKey.isNullOrBlank()) return apiKey
+        if (config.provider != LlmProviderPreset.Custom) {
+            return apiKeyStore.read(config.provider)
+        }
+        val saved = settingsRepository.settings.first()
+        val customMatches = saved.provider == LlmProviderPreset.Custom &&
+            saved.customProtocol == config.protocol &&
+            runCatching {
+                normalizeBaseUrl(saved.customBaseUrl) == normalizeBaseUrl(config.baseUrl)
+            }.getOrDefault(false)
+        return if (customMatches) apiKeyStore.read(LlmProviderPreset.Custom) else null
+    }
+
+    internal fun logDiagnostics(failure: Throwable, config: LlmConnectionConfig) {
         if (!BuildConfig.DEBUG) return
         val host = runCatching { config.baseUrl.toHttpUrl().host }.getOrNull() ?: ""
         val status = (failure as? LlmHttpException)?.statusCode?.toString() ?: "-"
         runCatching {
             Log.w(
                 "Raya-Llm",
-                "connection test failed class=${failure::class.java.simpleName} " +
+                "llm request failed class=${failure::class.java.simpleName} " +
                     "provider=${config.provider.name} protocol=${config.protocol} host=$host status=$status",
             )
         }

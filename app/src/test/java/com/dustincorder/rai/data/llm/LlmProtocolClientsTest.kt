@@ -101,7 +101,7 @@ class LlmProtocolClientsTest {
             openAi.reply(server.url("/v1").toString(), "model", "secret", "System", "Hi")
         }.exceptionOrNull()
         val message = LlmErrorClassifier.userMessage(failure!!)
-        assertEquals("Некорректный запрос к провайдеру.: Модель openai/gpt-oss-20b недоступна для этого проекта.", message)
+        assertEquals("Некорректный запрос к провайдеру: Модель openai/gpt-oss-20b недоступна для этого проекта.", message)
     }
 
     @Test

@@ -105,13 +105,42 @@ class ConfigurableReplyProviderTest {
     }
 
     @Test
-    fun `connection test reuses stored key when draft key is blank`() = runTest {
+    fun `connection test reuses stored key for builtin provider when draft key is blank`() = runTest {
         keyStore.storedKey = "stored-key"
+        val config = LlmConnectionConfig(
+            provider = LlmProviderPreset.Groq,
+            protocol = LlmProtocol.OpenAiCompatible,
+            baseUrl = server.url("/v1").toString().trimEnd('/'),
+            modelId = "model",
+        )
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        val result = provider.testConnection(config, "")
+
+        assertEquals(LlmConnectionResult.Success, result)
+        assertEquals("Bearer stored-key", server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `custom connection test never reuses stored key for a different endpoint`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible).copy(customBaseUrl = "https://old.example/v1"))
+        keyStore.storedKey = "SECRET_A"
         server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
         val result = provider.testConnection(custom(LlmProtocol.OpenAiCompatible).connectionConfig(), "")
 
         assertEquals(LlmConnectionResult.Success, result)
-        assertEquals("Bearer stored-key", server.takeRequest().getHeader("Authorization"))
+        assertEquals(null, server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `custom connection test reuses stored key only for the saved endpoint`() = runTest {
+        val saved = custom(LlmProtocol.OpenAiCompatible)
+        repository.save(saved)
+        keyStore.storedKey = "SECRET_A"
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        val result = provider.testConnection(saved.connectionConfig(), "")
+
+        assertEquals(LlmConnectionResult.Success, result)
+        assertEquals("Bearer SECRET_A", server.takeRequest().getHeader("Authorization"))
     }
 
     @Test
@@ -135,6 +164,27 @@ class ConfigurableReplyProviderTest {
 
         assertTrue(result is LlmConnectionResult.Failure)
         assertEquals("Не удалось подключиться к провайдеру.", (result as LlmConnectionResult.Failure).message)
+    }
+
+    @Test
+    fun `production reply maps network failure to safe user message`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":{"message":"boom"}}"""))
+        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+
+        assertTrue(failure is LlmSafeException)
+        assertEquals("Провайдер вернул ошибку сервера (HTTP 500): boom", failure?.message)
+    }
+
+    @Test
+    fun `missing configuration fails before network for production reply`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible).copy(modelId = ""))
+        keyStore.storedKey = null
+        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+
+        assertTrue(failure is LlmConfigurationException)
+        assertEquals(0, server.requestCount)
+        assertEquals("Настрой LLM-провайдера.", failure?.message)
     }
 
     private fun custom(protocol: LlmProtocol) = AppSettings(

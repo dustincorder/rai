@@ -42,6 +42,6 @@ object LlmErrorClassifier {
             else -> "Провайдер вернул ошибку HTTP ${error.statusCode}."
         }
         val detail = error.providerMessage?.takeIf { it.isNotBlank() } ?: return base
-        return "$base: $detail"
+        return "${base.trimEnd(' ', '.')}: $detail"
     }
 }

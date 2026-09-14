@@ -6,10 +6,17 @@ data class RayaAddressingResult(
 )
 
 object RayaAddressingParser {
-    private val prefix = Regex("^(?:райя|raya)(?=\\s|[,.!?;:—-]|$)[\\s,.!?;:—-]*", RegexOption.IGNORE_CASE)
+    private const val NAME = "(?:райя|рая|raya)"
+    private const val SEPARATOR = "[\\s,.!?;:—-]"
+
+    private val prefix = Regex(
+        "^(?:$NAME(?=$SEPARATOR|$)${SEPARATOR}*)+",
+        RegexOption.IGNORE_CASE,
+    )
 
     fun parse(text: String): RayaAddressingResult {
-        val match = prefix.find(text.trim()) ?: return RayaAddressingResult(false, text.trim())
-        return RayaAddressingResult(true, text.trim().removeRange(match.range).trim())
+        val trimmed = text.trim()
+        val match = prefix.find(trimmed) ?: return RayaAddressingResult(false, trimmed)
+        return RayaAddressingResult(true, trimmed.removeRange(match.range).trim())
     }
 }

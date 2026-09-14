@@ -100,6 +100,42 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `real stt spelling ray a uses local response without LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая", "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("Я здесь."), orchestrator.state.value)
+        assertEquals(0, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `repeated real stt names before a request still reach the LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, Райя, расскажи про Марс", "ru-RU"))
+        runCurrent()
+
+        assertEquals("расскажи про Марс", reply.lastInput)
+        assertEquals(1, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
     fun `local name response uses resolved language`() = runTest {
         val cases = listOf(
             "ru-RU" to "Я здесь.",

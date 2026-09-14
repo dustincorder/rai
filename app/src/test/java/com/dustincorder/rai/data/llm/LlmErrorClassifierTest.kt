@@ -52,7 +52,7 @@ class LlmErrorClassifierTest {
 
     @Test fun `unescaped http message does not leak provider body`() {
         assertEquals(
-            "Некорректный запрос к провайдеру.: Модель openai/gpt-oss-20b недоступна для этого проекта.",
+            "Некорректный запрос к провайдеру: Модель openai/gpt-oss-20b недоступна для этого проекта.",
             LlmErrorClassifier.userMessage(LlmHttpException(400, "Модель openai/gpt-oss-20b недоступна для этого проекта.")),
         )
     }
