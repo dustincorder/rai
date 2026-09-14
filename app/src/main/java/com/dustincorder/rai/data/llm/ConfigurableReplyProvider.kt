@@ -7,6 +7,8 @@ import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.data.settings.SettingsRepository
 import com.dustincorder.rai.data.settings.normalizeBaseUrl
+import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.ReplyProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
@@ -19,7 +21,8 @@ class ConfigurableReplyProvider(
     private val anthropic: AnthropicCompatibleReplyProvider,
     private val systemPrompt: () -> String,
 ) : ReplyProvider {
-    override suspend fun reply(input: String, languageTag: String?): String {
+    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String {
+        if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
         val settings = settingsRepository.settings.first()
         val config = settings.connectionConfig()
         return try {
@@ -36,8 +39,8 @@ class ConfigurableReplyProvider(
                 if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
             }
             when (settings.protocol) {
-                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
-                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
+                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
+                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -58,9 +61,10 @@ class ConfigurableReplyProvider(
                 return LlmConnectionResult.Failure("API key не сохранён.")
             }
             val probePrompt = "Тебе нужна проверка соединения. Ответь строго одним словом: OK."
+            val probe = listOf(ConversationMessage(ConversationRole.User, "ping"))
             when (config.protocol) {
-                LlmProtocol.OpenAiCompatible -> openAi.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, "ping")
-                LlmProtocol.AnthropicCompatible -> anthropic.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, "ping")
+                LlmProtocol.OpenAiCompatible -> openAi.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
+                LlmProtocol.AnthropicCompatible -> anthropic.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
             }
             LlmConnectionResult.Success
         } catch (cancellation: CancellationException) {

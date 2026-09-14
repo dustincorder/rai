@@ -1,13 +1,19 @@
 package com.dustincorder.rai.presentation
 
+import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.RayaState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.presentation.model.RayaFaceState
 import com.dustincorder.rai.presentation.model.RayaGaze
 
-fun rayaUiStateFor(state: RayaState, recognizedText: String = ""): RayaUiState = when (state) {
+fun rayaUiStateFor(
+    state: RayaState,
+    recognizedText: String = "",
+    conversation: List<ConversationMessage> = emptyList(),
+): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
         face = RayaFaceState(),
+        conversation = conversation,
     )
     RayaState.Listening -> RayaUiState(
         face = RayaFaceState(
@@ -15,8 +21,8 @@ fun rayaUiStateFor(state: RayaState, recognizedText: String = ""): RayaUiState =
             gaze = RayaGaze.Alert,
         ),
         status = "Слушаю",
-        userText = recognizedText.ifBlank { "Я слушаю тебя..." },
-        responseText = "",
+        userText = recognizedText,
+        conversation = conversation,
         isBusy = true,
     )
     RayaState.Thinking -> RayaUiState(
@@ -25,8 +31,7 @@ fun rayaUiStateFor(state: RayaState, recognizedText: String = ""): RayaUiState =
             gaze = RayaGaze.Up,
         ),
         status = "Размышляю",
-        userText = recognizedText,
-        responseText = "Собираю ответ...",
+        conversation = conversation,
         isBusy = true,
     )
     is RayaState.Speaking -> RayaUiState(
@@ -35,8 +40,7 @@ fun rayaUiStateFor(state: RayaState, recognizedText: String = ""): RayaUiState =
             gaze = RayaGaze.Center,
         ),
         status = "Говорю",
-        userText = recognizedText,
-        responseText = state.text,
+        conversation = conversation,
         isBusy = true,
     )
     is RayaState.Error -> RayaUiState(
@@ -45,7 +49,6 @@ fun rayaUiStateFor(state: RayaState, recognizedText: String = ""): RayaUiState =
             gaze = RayaGaze.Wide,
         ),
         status = "Сбой системы",
-        userText = recognizedText,
-        responseText = state.message,
+        conversation = conversation,
     )
 }

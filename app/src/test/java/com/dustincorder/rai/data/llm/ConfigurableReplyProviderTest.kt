@@ -7,6 +7,8 @@ import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.data.settings.SettingsRepository
 import com.dustincorder.rai.domain.ConversationLanguage
+import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.ConversationRole
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -19,6 +21,7 @@ import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -58,7 +61,7 @@ class ConfigurableReplyProviderTest {
 
     @Test
     fun `missing provider configuration avoids network request`() = runTest {
-        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+        val failure = runCatching { provider.reply(userMsg("hello"), "en-US") }.exceptionOrNull()
         assertTrue(failure is LlmSafeException)
         assertEquals("API key не сохранён.", failure?.message)
         assertEquals(0, server.requestCount)
@@ -68,12 +71,12 @@ class ConfigurableReplyProviderTest {
     fun `provider switching applies to next request`() = runTest {
         repository.save(custom(LlmProtocol.OpenAiCompatible))
         server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"one"}}]}"""))
-        assertEquals("one", provider.reply("hello", "en-US"))
+        assertEquals("one", provider.reply(userMsg("hello"), "en-US"))
         assertEquals("/v1/chat/completions", server.takeRequest().path)
 
         repository.save(custom(LlmProtocol.AnthropicCompatible))
         server.enqueue(MockResponse().setBody("""{"content":[{"type":"text","text":"two"}]}"""))
-        assertEquals("two", provider.reply("hello", "en-US"))
+        assertEquals("two", provider.reply(userMsg("hello"), "en-US"))
         assertEquals("/v1/messages", server.takeRequest().path)
     }
 
@@ -172,7 +175,7 @@ class ConfigurableReplyProviderTest {
     fun `production reply maps network failure to safe user message`() = runTest {
         repository.save(custom(LlmProtocol.OpenAiCompatible))
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":{"message":"boom"}}"""))
-        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+        val failure = runCatching { provider.reply(userMsg("hello"), "en-US") }.exceptionOrNull()
 
         assertTrue(failure is LlmSafeException)
         assertEquals("Провайдер вернул ошибку сервера (HTTP 500): boom", failure?.message)
@@ -182,7 +185,7 @@ class ConfigurableReplyProviderTest {
     fun `missing configuration fails before network for production reply`() = runTest {
         repository.save(custom(LlmProtocol.OpenAiCompatible).copy(modelId = ""))
         keyStore.storedKey = null
-        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+        val failure = runCatching { provider.reply(userMsg("hello"), "en-US") }.exceptionOrNull()
 
         assertTrue(failure is LlmSafeException)
         assertEquals(0, server.requestCount)
@@ -193,7 +196,7 @@ class ConfigurableReplyProviderTest {
     fun `production reply reports missing api key`() = runTest {
         repository.save(AppSettings(provider = LlmProviderPreset.Groq, modelId = "model"))
         keyStore.storedKey = null
-        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+        val failure = runCatching { provider.reply(userMsg("hello"), "en-US") }.exceptionOrNull()
 
         assertTrue(failure is LlmSafeException)
         assertEquals("API key не сохранён.", failure?.message)
@@ -271,12 +274,52 @@ class ConfigurableReplyProviderTest {
         assertEquals(0, server.requestCount)
     }
 
+    @Test
+    fun `connection test sends only probe and ignores conversation`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        val result = provider.testConnection(custom(LlmProtocol.OpenAiCompatible).connectionConfig(), "key")
+
+        assertEquals(LlmConnectionResult.Success, result)
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"role\":\"user\",\"content\":\"ping\""))
+        val messages = body.substringAfter("\"messages\":[")
+        assertEquals(1, Regex("""\{"role":"user"""").findAll(messages).count())
+        assertFalse(messages.contains("\"role\":\"assistant\""))
+    }
+
+    @Test
+    fun `production reply sends system once followed by full history`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible).copy(modelId = "model"))
+        keyStore.storedKey = "key"
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"D"}}]}"""))
+        val reply = provider.reply(
+            listOf(
+                ConversationMessage(ConversationRole.User, "A"),
+                ConversationMessage(ConversationRole.Assistant, "B"),
+                ConversationMessage(ConversationRole.User, "C"),
+            ),
+            "en-US",
+        )
+
+        assertEquals("D", reply)
+        val body = server.takeRequest().body.readUtf8()
+        val messages = body.substringAfter("\"messages\":[")
+        assertEquals(1, Regex("""\{"role":"system"""").findAll(messages).count())
+        val userA = messages.indexOf("\"role\":\"user\",\"content\":\"A\"")
+        val assistantB = messages.indexOf("\"role\":\"assistant\",\"content\":\"B\"")
+        val userC = messages.indexOf("\"role\":\"user\",\"content\":\"C\"")
+        assertTrue(userA in 0 until assistantB)
+        assertTrue(assistantB in 0 until userC)
+    }
+
     private fun custom(protocol: LlmProtocol) = AppSettings(
         provider = LlmProviderPreset.Custom,
         customProtocol = protocol,
         customBaseUrl = server.url("/v1").toString().trimEnd('/'),
         modelId = "model",
     )
+private fun userMsg(text: String) = listOf(ConversationMessage(ConversationRole.User, text))
 }
 
 private class FakeSettingsRepository(initial: AppSettings) : SettingsRepository {

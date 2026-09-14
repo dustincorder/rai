@@ -24,11 +24,11 @@ interface SpeechSynthesisProvider {
 }
 
 interface ReplyProvider {
-    suspend fun reply(input: String, languageTag: String?): String
+    suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String
 }
 
 class MockReplyProvider : ReplyProvider {
-    override suspend fun reply(input: String, languageTag: String?): String = "Я тебя слышу."
+    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String = "Я тебя слышу."
 }
 
 interface ConversationLanguageProvider {
