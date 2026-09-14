@@ -31,8 +31,8 @@ import androidx.compose.ui.unit.dp
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.presentation.model.RayaFaceState
 import com.dustincorder.rai.presentation.model.RayaGaze
-import com.dustincorder.rai.ui.theme.Danger
 import com.dustincorder.rai.ui.theme.RayaTheme
+import kotlin.math.min
 import kotlin.random.Random
 
 private val EyeCyan = Color(0xFF00A8B5)
@@ -105,23 +105,25 @@ private fun DrawScope.drawFace(
 ) {
     val width = size.width
     val height = size.height
+    val eyeSize = min(width, height) * 0.14f
     val centerY = height * (0.48f + gazeY + if (state.emotion == RayaFaceEmotion.Calm) idleDrift * 0.004f else 0f)
-    val color = if (state.emotion == RayaFaceEmotion.Error || state.emotion == RayaFaceEmotion.Angry) Danger else EyeCyan
+    val color = EyeCyan
     val listeningScale = if (state.emotion == RayaFaceEmotion.Listening) 1f + listeningPulse * 0.08f else 1f
     val speakingScale = if (state.emotion == RayaFaceEmotion.Speaking) 1f + speakingPulse * 0.06f else 1f
     val shapeScale = listeningScale * speakingScale
-    val baseHeight = when (state.emotion) {
-        RayaFaceEmotion.Surprised -> height * 0.18f
-        RayaFaceEmotion.Happy -> height * 0.075f
-        RayaFaceEmotion.Curious -> height * 0.14f
-        RayaFaceEmotion.Concerned -> height * 0.075f
-        RayaFaceEmotion.Error -> height * 0.09f
-        else -> height * 0.11f
+    val eyeHeight = when (state.emotion) {
+        RayaFaceEmotion.Surprised -> eyeSize * 1.35f
+        RayaFaceEmotion.Happy -> eyeSize * 0.58f
+        RayaFaceEmotion.Curious -> eyeSize * 1.12f
+        RayaFaceEmotion.Concerned -> eyeSize * 0.62f
+        RayaFaceEmotion.Error -> eyeSize * (0.72f + errorPulse * 0.18f)
+        else -> eyeSize
     } * shapeScale
     val eyeWidth = when (state.emotion) {
-        RayaFaceEmotion.Surprised -> width * 0.16f
-        RayaFaceEmotion.Happy -> width * 0.14f
-        else -> width * 0.125f
+        RayaFaceEmotion.Surprised -> eyeSize * 1.25f
+        RayaFaceEmotion.Happy -> eyeSize * 1.15f
+        RayaFaceEmotion.Error -> eyeSize * (0.9f + errorPulse * 0.1f)
+        else -> eyeSize
     }
     val eyeAngle = when (state.emotion) {
         RayaFaceEmotion.Angry -> -13f
@@ -129,10 +131,10 @@ private fun DrawScope.drawFace(
         RayaFaceEmotion.Curious -> -6f
         else -> 0f
     }
-    val eyeY = if (blinking) centerY else centerY
+    val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
 
-    drawEye(width * (0.36f + gazeX), eyeY, eyeWidth, baseHeight, color, eyeAngle, blinking)
-    drawEye(width * (0.64f + gazeX), eyeY, eyeWidth, baseHeight, color, -eyeAngle, blinking)
+    drawEye(width * (0.36f + gazeX) - errorOffset, centerY, eyeWidth, eyeHeight, color, eyeAngle, blinking)
+    drawEye(width * (0.64f + gazeX) + errorOffset, centerY, eyeWidth, eyeHeight, color, -eyeAngle, blinking)
 
     when (state.emotion) {
         RayaFaceEmotion.Thinking -> drawThinkingDots(width, height, color, thinkingSweep)
@@ -141,15 +143,6 @@ private fun DrawScope.drawFace(
         else -> Unit
     }
 
-    if (state.emotion == RayaFaceEmotion.Error) {
-        drawLine(
-            color = color.copy(alpha = 0.35f + errorPulse * 0.35f),
-            start = point(width * 0.3f, height * 0.72f),
-            end = point(width * 0.7f, height * 0.72f),
-            strokeWidth = width * 0.012f,
-            cap = StrokeCap.Round,
-        )
-    }
 }
 
 private fun DrawScope.drawEye(
@@ -165,7 +158,7 @@ private fun DrawScope.drawEye(
     withTransform({ rotate(angle, pivot = point(x, y)) }) {
         drawRect(
             color = color,
-            topLeft = point(x - width / 2f, y - if (blinking) closedHeight else height / 2f),
+            topLeft = point(x - width / 2f, y - if (blinking) closedHeight / 2f else height / 2f),
             size = dimensions(width, if (blinking) closedHeight else height),
         )
     }
@@ -197,6 +190,28 @@ private fun RayaFacePreview() {
         Box(modifier = Modifier.fillMaxWidth().widthIn(max = 390.dp)) {
             RayaFace(state = RayaFaceState(emotion = RayaFaceEmotion.Calm))
         }
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, name = "Angry cyan eyes")
+@Composable
+private fun RayaFaceAngryPreview() {
+    RayaTheme {
+        RayaFace(
+            state = RayaFaceState(emotion = RayaFaceEmotion.Angry),
+            modifier = Modifier.size(280.dp),
+        )
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, name = "Error no mouth")
+@Composable
+private fun RayaFaceErrorPreview() {
+    RayaTheme {
+        RayaFace(
+            state = RayaFaceState(emotion = RayaFaceEmotion.Error),
+            modifier = Modifier.size(280.dp),
+        )
     }
 }
 
