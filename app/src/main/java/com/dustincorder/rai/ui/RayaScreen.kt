@@ -1,5 +1,6 @@
 package com.dustincorder.rai.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,58 +9,55 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dustincorder.rai.presentation.RayaUiState
-import com.dustincorder.rai.presentation.model.RayaAntennaMotion
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
-import com.dustincorder.rai.presentation.model.RayaFaceState
-import com.dustincorder.rai.presentation.model.RayaGaze
 import com.dustincorder.rai.ui.raya.face.RayaFace
+import com.dustincorder.rai.ui.theme.Cyan
 import com.dustincorder.rai.ui.theme.CyanSoft
+import com.dustincorder.rai.ui.theme.Danger
 import com.dustincorder.rai.ui.theme.Muted
+import com.dustincorder.rai.ui.theme.Panel
+import com.dustincorder.rai.ui.theme.PanelRaised
+import com.dustincorder.rai.ui.theme.Violet
 import com.dustincorder.rai.ui.theme.Void
 
 @Composable
-fun RayaScreen(state: RayaUiState) {
-    var selectedEmotion by remember { mutableStateOf(state.face.emotion) }
-    var mouthAmplitude by remember { mutableStateOf(0.72f) }
-    var selectedGaze by remember { mutableStateOf(RayaGaze.Center) }
-
-    val faceState = RayaFaceState(
-        emotion = selectedEmotion,
-        mouthAmplitude = if (selectedEmotion == RayaFaceEmotion.Speaking) mouthAmplitude else 0f,
-        gaze = selectedGaze,
-        antennaMotion = when (selectedEmotion) {
-            RayaFaceEmotion.Listening -> RayaAntennaMotion.Responsive
-            RayaFaceEmotion.Thinking -> RayaAntennaMotion.Thinking
-            RayaFaceEmotion.Error -> RayaAntennaMotion.Alert
-            RayaFaceEmotion.Speaking, RayaFaceEmotion.Happy -> RayaAntennaMotion.Responsive
-            else -> RayaAntennaMotion.Resting
-        },
-    )
+fun RayaScreen(
+    state: RayaUiState,
+    onTalkClick: () -> Unit,
+) {
+    val canCancel = state.face.emotion == RayaFaceEmotion.Listening
+    val buttonEnabled = !state.isBusy || canCancel
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .safeDrawingPadding()
+            .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -77,114 +75,135 @@ fun RayaScreen(state: RayaUiState) {
                     letterSpacing = 3.sp,
                 )
                 Text(
-                    text = "FACE GALLERY / DEMO BUILD",
+                    text = "PRIME CORE / VOICE MODE",
                     color = Muted,
                     style = MaterialTheme.typography.labelSmall,
                     letterSpacing = 1.4.sp,
                 )
             }
             Text(
-                text = "LOCAL",
-                color = Muted,
+                text = state.status.uppercase(),
+                color = statusColor(state),
                 style = MaterialTheme.typography.labelSmall,
-                letterSpacing = 1.2.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp,
             )
         }
 
         Spacer(Modifier.height(14.dp))
         RayaFace(
-            state = faceState,
+            state = state.face,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 420.dp),
         )
+        Spacer(Modifier.height(10.dp))
+        StatusPill(state)
+        Spacer(Modifier.height(18.dp))
 
-        Spacer(Modifier.height(8.dp))
+        ConversationCard(state)
+        Spacer(Modifier.height(18.dp))
+
+        Button(
+            onClick = onTalkClick,
+            enabled = buttonEnabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Cyan,
+                contentColor = Void,
+                disabledContainerColor = PanelRaised,
+                disabledContentColor = Muted,
+            ),
+        ) {
+            Icon(Icons.Outlined.MicNone, contentDescription = null)
+            Spacer(Modifier.size(10.dp))
+            Text(
+                text = if (canCancel) "ОТМЕНИТЬ СЛУШАНИЕ" else "ГОВОРИТЬ",
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
         Text(
-            text = selectedEmotion.name,
-            color = CyanSoft,
-            style = MaterialTheme.typography.titleMedium,
+            text = "Распознавание: русский язык • LLM пока не подключена",
+            color = Muted,
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun StatusPill(state: RayaUiState) {
+    val color = statusColor(state)
+    Row(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.1f), RoundedCornerShape(50))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Spacer(
+            modifier = Modifier
+                .size(7.dp)
+                .background(color, RoundedCornerShape(50)),
+        )
+        Text(
+            text = state.status.uppercase(),
+            color = color,
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 1.6.sp,
+            letterSpacing = 1.1.sp,
         )
-        Spacer(Modifier.height(16.dp))
+    }
+}
 
-        EmotionGallery(
-            selected = selectedEmotion,
-            onSelected = { selectedEmotion = it },
-        )
-
-        Spacer(Modifier.height(14.dp))
-        GazeGallery(
-            selected = selectedGaze,
-            onSelected = { selectedGaze = it },
-        )
-
-        if (selectedEmotion == RayaFaceEmotion.Speaking) {
-            Spacer(Modifier.height(14.dp))
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text("MOUTH AMPLITUDE", color = Muted, style = MaterialTheme.typography.labelMedium)
-                    Text(
-                        text = "%.2f".format(mouthAmplitude),
-                        color = CyanSoft,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-                Slider(
-                    value = mouthAmplitude,
-                    onValueChange = { mouthAmplitude = it },
-                    valueRange = 0f..1f,
-                    modifier = Modifier.fillMaxWidth(),
+@Composable
+private fun ConversationCard(state: RayaUiState) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = Panel,
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text("ТЫ", color = Cyan, style = MaterialTheme.typography.labelSmall)
+            Text(
+                text = state.userText.ifBlank { "Нажми кнопку и скажи что-нибудь." },
+                color = CyanSoft,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            if (state.responseText.isNotBlank()) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 14.dp),
+                    color = Color.White.copy(alpha = 0.08f),
+                )
+                Text(
+                    text = if (state.face.emotion == RayaFaceEmotion.Error) "СИСТЕМА" else "РАЙЯ",
+                    color = if (state.face.emotion == RayaFaceEmotion.Error) Danger else Violet,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Text(
+                    text = state.responseText,
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyLarge,
                 )
             }
         }
     }
 }
 
-@Composable
-private fun EmotionGallery(
-    selected: RayaFaceEmotion,
-    onSelected: (RayaFaceEmotion) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        RayaFaceEmotion.entries.chunked(2).forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                row.forEach { emotion ->
-                    FilterChip(
-                        selected = selected == emotion,
-                        onClick = { onSelected(emotion) },
-                        label = { Text(emotion.name) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GazeGallery(
-    selected: RayaGaze,
-    onSelected: (RayaGaze) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        listOf(RayaGaze.Center, RayaGaze.Up, RayaGaze.Down).forEach { gaze ->
-            FilterChip(
-                selected = selected == gaze,
-                onClick = { onSelected(gaze) },
-                label = { Text(gaze.name) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
+private fun statusColor(state: RayaUiState): Color = when (state.face.emotion) {
+    RayaFaceEmotion.Calm -> Cyan
+    RayaFaceEmotion.Listening -> CyanSoft
+    RayaFaceEmotion.Thinking -> Violet
+    RayaFaceEmotion.Speaking -> Cyan
+    RayaFaceEmotion.Happy -> Cyan
+    RayaFaceEmotion.Curious -> Violet
+    RayaFaceEmotion.Concerned -> Danger
+    RayaFaceEmotion.Surprised -> CyanSoft
+    RayaFaceEmotion.Angry -> Danger
+    RayaFaceEmotion.Error -> Danger
 }

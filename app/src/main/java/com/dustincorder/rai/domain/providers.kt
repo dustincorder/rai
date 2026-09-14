@@ -1,16 +1,32 @@
 package com.dustincorder.rai.domain
 
-/** Future boundary for a local or remote language model. */
-interface LlmProvider {
-    suspend fun generateReply(input: String): String
+import kotlinx.coroutines.flow.Flow
+import java.util.Locale
+
+sealed interface SpeechRecognitionEvent {
+    data class Partial(val text: String) : SpeechRecognitionEvent
+    data class Final(val text: String) : SpeechRecognitionEvent
+    data class Error(val message: String) : SpeechRecognitionEvent
 }
 
-/** Future boundary for microphone-to-text implementations. */
 interface SpeechRecognitionProvider {
-    suspend fun recognize(): String
+    val events: Flow<SpeechRecognitionEvent>
+
+    fun startListening(locale: Locale = Locale("ru", "RU"))
+    fun cancel()
+    fun release()
 }
 
-/** Future boundary for text-to-speech implementations. */
 interface SpeechSynthesisProvider {
-    suspend fun speak(text: String)
+    suspend fun speak(text: String, locale: Locale = Locale("ru", "RU"))
+    fun stop()
+    fun shutdown()
+}
+
+interface ReplyProvider {
+    suspend fun reply(input: String): String
+}
+
+class MockReplyProvider : ReplyProvider {
+    override suspend fun reply(input: String): String = "Я тебя слышу."
 }
