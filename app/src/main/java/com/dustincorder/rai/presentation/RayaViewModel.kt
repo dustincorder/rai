@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.RayaApplication
 import com.dustincorder.rai.domain.RayaOrchestrator
+import com.dustincorder.rai.domain.RayaRoutingDiagnostics
 import com.dustincorder.rai.domain.ReplyProvider
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
 import com.dustincorder.rai.domain.SpeechSynthesisProvider
@@ -21,6 +22,7 @@ class RayaViewModel(
     speechSynthesis: SpeechSynthesisProvider,
     replyProvider: ReplyProvider,
     languageProvider: ConversationLanguageProvider,
+    routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
 ) : ViewModel() {
     private val orchestrator = RayaOrchestrator(
         scope = viewModelScope,
@@ -28,6 +30,7 @@ class RayaViewModel(
         speechSynthesis = speechSynthesis,
         replyProvider = replyProvider,
         languageProvider = languageProvider,
+        routingDiagnostics = routingDiagnostics,
     )
 
     val uiState: StateFlow<RayaUiState> = combine(
@@ -55,6 +58,7 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
             speechSynthesis = AndroidSpeechSynthesisProvider(application),
             replyProvider = application.replyProvider,
             languageProvider = application.settingsRepository,
+            routingDiagnostics = AndroidRayaRoutingDiagnostics(),
         ) as T
     }
 }

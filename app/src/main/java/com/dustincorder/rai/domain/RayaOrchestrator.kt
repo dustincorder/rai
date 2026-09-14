@@ -1,7 +1,5 @@
 package com.dustincorder.rai.domain
 
-import android.util.Log
-import com.dustincorder.rai.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +11,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancelAndJoin
 import java.util.Locale
 
+fun interface RayaRoutingDiagnostics {
+    fun record(addressed: Boolean, queryBlank: Boolean, localResponse: Boolean)
+}
+
 class RayaOrchestrator(
     private val scope: CoroutineScope,
     private val speechRecognition: SpeechRecognitionProvider,
@@ -22,6 +24,7 @@ class RayaOrchestrator(
         override suspend fun currentLanguage(): ConversationLanguage = ConversationLanguage.System
     },
     private val systemLanguageTag: () -> String = { Locale.getDefault().toLanguageTag() },
+    private val routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
 ) {
     private val _state = MutableStateFlow<RayaState>(RayaState.Idle)
     val state: StateFlow<RayaState> = _state.asStateFlow()
@@ -74,7 +77,7 @@ class RayaOrchestrator(
                 val resolvedLanguageTag = language.resolveLanguageTag(result.detectedLanguageTag, systemTag)
                 val queryBlank = addressing.query.isBlank()
                 val localResponse = addressing.addressed && queryBlank
-                logRouting(addressing.addressed, queryBlank, localResponse)
+                routingDiagnostics.record(addressing.addressed, queryBlank, localResponse)
                 val response = if (localResponse) {
                     localNameResponse(resolvedLanguageTag)
                 } else {
@@ -131,11 +134,4 @@ class RayaOrchestrator(
     }
 
     class RecognitionException(message: String) : RuntimeException(message)
-
-    private fun logRouting(addressed: Boolean, queryBlank: Boolean, localResponse: Boolean) {
-        if (!BuildConfig.DEBUG) return
-        runCatching {
-            Log.d("Raya-Routing", "addressed=$addressed queryBlank=$queryBlank localResponse=$localResponse")
-        }
-    }
 }

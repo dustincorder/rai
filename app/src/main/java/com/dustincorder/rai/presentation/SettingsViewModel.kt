@@ -17,6 +17,7 @@ import com.dustincorder.rai.data.llm.requireTransportAllowed
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -114,12 +115,14 @@ class SettingsViewModel(
     }
 
     private suspend fun clearStaleCustomKey(settings: AppSettings, newKey: String) {
-        val previous = this.settings.value
-        if (settings.provider == LlmProviderPreset.Custom &&
-            previous.provider == LlmProviderPreset.Custom &&
-            previous.customBaseUrl != settings.customBaseUrl &&
-            newKey.isBlank()
-        ) {
+        val previous = repository.settings.first()
+        if (previous.provider != LlmProviderPreset.Custom || settings.provider != LlmProviderPreset.Custom) return
+        if (newKey.isNotBlank()) return
+        val endpointChanged = runCatching {
+            normalizeBaseUrl(previous.customBaseUrl) != normalizeBaseUrl(settings.customBaseUrl)
+        }.getOrDefault(previous.customBaseUrl != settings.customBaseUrl)
+        val protocolChanged = previous.customProtocol != settings.customProtocol
+        if (endpointChanged || protocolChanged) {
             apiKeyStore.delete(LlmProviderPreset.Custom)
         }
     }

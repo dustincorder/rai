@@ -64,7 +64,10 @@ class AndroidApiKeyStore(context: Context) : ApiKeyStore {
     }
 
     private fun remove(name: String) {
-        preferences.edit().remove(name).commit()
+        val committed = preferences.edit().remove(name).commit()
+        if (!committed) {
+            throw ApiKeyStorageException("Не удалось удалить API key.")
+        }
     }
 
     private fun encrypt(value: String): ByteArray {

@@ -11,6 +11,18 @@ val gitSha: String = runCatching {
         .trim()
 }.getOrDefault("unknown")
 
+val gitDirty: Boolean = runCatching {
+    providers.exec { commandLine("git", "status", "--porcelain") }
+        .standardOutput.asText.get()
+        .isNotBlank()
+}.getOrDefault(false)
+
+val buildId: String = when {
+    gitSha == "unknown" -> "unknown"
+    gitDirty -> "$gitSha-dirty"
+    else -> gitSha
+}
+
 android {
     namespace = "com.dustincorder.rai"
     compileSdk = 35
@@ -21,7 +33,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+        buildConfigField("String", "GIT_SHA", "\"$buildId\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

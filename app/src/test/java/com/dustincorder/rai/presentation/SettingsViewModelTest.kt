@@ -169,6 +169,46 @@ class SettingsViewModelTest {
         assertEquals("Настройки сохранены", status.message)
     }
 
+    @Test
+    fun `stale custom key deletion failure aborts save and keeps old config`() = runBlocking {
+        val oldSettings = customSettings(LlmProtocol.OpenAiCompatible, "https://host/v1")
+        repository.save(oldSettings)
+        keyStore.storedKey = "SECRET_A"
+        keyStore.failDelete = true
+
+        viewModel.save(customSettings(LlmProtocol.OpenAiCompatible, "https://host/v2"), "")
+        val status = awaitTerminalStatus()
+
+        assertTrue(status.isError)
+        assertEquals("Не удалось удалить API key.", status.message)
+        assertEquals(1, repository.saveCount)
+        assertEquals(oldSettings, repository.state.value)
+    }
+
+    @Test
+    fun `custom protocol change deletes stale key`() = runBlocking {
+        repository.save(customSettings(LlmProtocol.OpenAiCompatible, "https://host/v1"))
+        keyStore.storedKey = "SECRET_A"
+
+        viewModel.save(customSettings(LlmProtocol.AnthropicCompatible, "https://host/v1"), "")
+        awaitTerminalStatus()
+
+        assertEquals(null, keyStore.storedKey)
+        assertEquals(2, repository.saveCount)
+    }
+
+    @Test
+    fun `trailing slash change does not count as different endpoint`() = runBlocking {
+        repository.save(customSettings(LlmProtocol.OpenAiCompatible, "https://host/v1/"))
+        keyStore.storedKey = "SECRET_A"
+
+        viewModel.save(customSettings(LlmProtocol.OpenAiCompatible, "https://host/v1"), "")
+        awaitTerminalStatus()
+
+        assertEquals("SECRET_A", keyStore.storedKey)
+        assertEquals(2, repository.saveCount)
+    }
+
     private suspend fun awaitTerminalStatus(): ConnectionStatus.Message {
         var message: ConnectionStatus.Message? = null
         withTimeout(11_000) {
@@ -217,6 +257,13 @@ class SettingsViewModelTest {
         customBaseUrl = server.url("/v1").toString().trimEnd('/'),
         modelId = "draft-model",
     )
+
+    private fun customSettings(protocol: LlmProtocol, url: String) = AppSettings(
+        provider = LlmProviderPreset.Custom,
+        customProtocol = protocol,
+        customBaseUrl = url,
+        modelId = "model",
+    )
 }
 
 private class TrackingSettingsRepository(initial: AppSettings) : SettingsRepository {
@@ -237,6 +284,7 @@ private class TrackingApiKeyStore : ApiKeyStore {
     var writtenKey: String? = null
     var storedKey: String? = null
     var failRead = false
+    var failDelete = false
 
     override suspend fun read(provider: LlmProviderPreset): String? {
         if (failRead) throw ApiKeyStorageException("Не удалось прочитать сохранённый API key. Замените или удалите его.")
@@ -250,6 +298,7 @@ private class TrackingApiKeyStore : ApiKeyStore {
     }
 
     override suspend fun delete(provider: LlmProviderPreset) {
+        if (failDelete) throw ApiKeyStorageException("Не удалось удалить API key.")
         storedKey = null
     }
 }
