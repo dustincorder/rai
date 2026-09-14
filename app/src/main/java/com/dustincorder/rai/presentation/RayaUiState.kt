@@ -8,5 +8,6 @@ data class RayaUiState(
     val status: String = "Готова к разговору",
     val userText: String = "",
     val conversation: List<ConversationMessage> = emptyList(),
+    val errorMessage: String? = null,
     val isBusy: Boolean = false,
 )

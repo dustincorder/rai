@@ -50,5 +50,6 @@ fun rayaUiStateFor(
         ),
         status = "Сбой системы",
         conversation = conversation,
+        errorMessage = state.message,
     )
 }
