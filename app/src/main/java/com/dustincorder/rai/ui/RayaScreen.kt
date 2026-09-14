@@ -20,25 +20,33 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.CallEnd
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.MicOff
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,11 +55,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.presentation.RayaUiState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
@@ -61,13 +71,16 @@ import com.dustincorder.rai.ui.theme.RayaTheme
 @Composable
 fun RayaScreen(
     state: RayaUiState,
-    onTalkClick: () -> Unit,
+    onSubmitText: (String) -> Unit,
+    onVoiceChatClick: () -> Unit,
+    onEndVoiceSession: () -> Unit,
+    onToggleMicrophone: () -> Unit,
+    onInterruptSpeech: () -> Unit,
     onSettingsClick: () -> Unit,
     onClearConversation: () -> Unit,
 ) {
-    val canCancel = state.face.emotion == RayaFaceEmotion.Listening
-    val buttonEnabled = !state.isBusy || canCancel
-    val canClear = state.conversation.isNotEmpty() && !state.isBusy
+    var draft by remember { mutableStateOf("") }
+    val canClear = state.conversation.isNotEmpty() && !state.voiceSessionActive
     var showClearDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -101,53 +114,47 @@ fun RayaScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(contentPadding)
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(contentPadding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            RayaFace(
-                state = state.face,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 220.dp),
-            )
-            Spacer(Modifier.height(4.dp))
-            StatusChip(state)
-            if (state.errorMessage != null) {
-                Spacer(Modifier.height(12.dp))
-                ErrorBanner(state.errorMessage)
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                RayaFace(
+                    state = state.face,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp),
+                )
+                Spacer(Modifier.height(4.dp))
+                StatusChip(state)
+                if (state.errorMessage != null) {
+                    Spacer(Modifier.height(12.dp))
+                    ErrorBanner(state.errorMessage)
+                }
             }
-            Spacer(Modifier.height(18.dp))
             ConversationArea(
                 state = state,
-                modifier = Modifier.weight(1f, fill = true),
-            )
-            Spacer(Modifier.height(20.dp))
-            Button(
-                onClick = onTalkClick,
-                enabled = buttonEnabled,
                 modifier = Modifier
+                    .weight(1f, fill = true)
                     .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                Icon(Icons.Outlined.MicNone, contentDescription = null)
-                Spacer(Modifier.size(10.dp))
-                Text(
-                    if (canCancel) "ОТМЕНИТЬ СЛУШАНИЕ" else "ГОВОРИТЬ",
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Язык разговора можно изменить в настройках",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
+                    .padding(top = 18.dp),
+            )
+            BottomControls(
+                state = state,
+                draft = draft,
+                onDraftChange = { draft = it },
+                onSubmitText = {
+                    onSubmitText(draft)
+                    draft = ""
+                },
+                onVoiceChatClick = onVoiceChatClick,
+                onEndVoiceSession = onEndVoiceSession,
+                onToggleMicrophone = onToggleMicrophone,
+                onInterruptSpeech = onInterruptSpeech,
             )
         }
     }
@@ -175,6 +182,138 @@ fun RayaScreen(
 }
 
 @Composable
+private fun BottomControls(
+    state: RayaUiState,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSubmitText: () -> Unit,
+    onVoiceChatClick: () -> Unit,
+    onEndVoiceSession: () -> Unit,
+    onToggleMicrophone: () -> Unit,
+    onInterruptSpeech: () -> Unit,
+) {
+    if (!state.voiceSessionActive) {
+        TextComposer(
+            draft = draft,
+            onDraftChange = onDraftChange,
+            onSubmitText = onSubmitText,
+            onVoiceChatClick = onVoiceChatClick,
+        )
+    } else {
+        VoiceControls(
+            state = state,
+            onEndVoiceSession = onEndVoiceSession,
+            onToggleMicrophone = onToggleMicrophone,
+            onInterruptSpeech = onInterruptSpeech,
+        )
+    }
+}
+
+@Composable
+private fun TextComposer(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSubmitText: () -> Unit,
+    onVoiceChatClick: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 1.dp,
+    ) {
+        Column {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    placeholder = { Text("Написать сообщение…") },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 4,
+                    shape = RoundedCornerShape(24.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (draft.isNotBlank()) onSubmitText()
+                    }),
+                )
+                IconButton(
+                    onClick = onSubmitText,
+                    enabled = draft.isNotBlank(),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.Send,
+                        contentDescription = "Отправить сообщение",
+                    )
+                }
+                IconButton(onClick = onVoiceChatClick) {
+                    Icon(Icons.Outlined.MicNone, contentDescription = "Голосовой чат")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceControls(
+    state: RayaUiState,
+    onEndVoiceSession: () -> Unit,
+    onToggleMicrophone: () -> Unit,
+    onInterruptSpeech: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 1.dp,
+    ) {
+        Column {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f, fill = true)) {
+                    Text("Голосовой чат", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        state.status,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (state.face.emotion == RayaFaceEmotion.Speaking) {
+                    IconButton(onClick = onInterruptSpeech) {
+                        Icon(Icons.Outlined.Stop, contentDescription = "Остановить речь")
+                    }
+                }
+                IconButton(onClick = onToggleMicrophone) {
+                    Icon(
+                        if (state.microphoneEnabled) Icons.Outlined.Mic else Icons.Outlined.MicOff,
+                        contentDescription = if (state.microphoneEnabled) {
+                            "Выключить микрофон"
+                        } else {
+                            "Включить микрофон"
+                        },
+                    )
+                }
+                IconButton(onClick = onEndVoiceSession) {
+                    Icon(Icons.Outlined.CallEnd, contentDescription = "Завершить голосовой чат")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConversationArea(
     state: RayaUiState,
     modifier: Modifier = Modifier,
@@ -184,6 +323,13 @@ private fun ConversationArea(
     val listening = state.face.emotion == RayaFaceEmotion.Listening
     val showTransient = listening && state.userText.isNotBlank() &&
         messages.lastOrNull()?.text != state.userText
+    val nearBottom by remember {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= layout.totalItemsCount - 2
+        }
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -191,7 +337,13 @@ private fun ConversationArea(
         }
     }
 
-    if (messages.isEmpty() && !showTransient) {
+    LaunchedEffect(showTransient, state.userText) {
+        if (showTransient && nearBottom) {
+            listState.animateScrollToItem(messages.size)
+        }
+    }
+
+    if (messages.isEmpty()) {
         Box(
             modifier = modifier.fillMaxWidth(),
             contentAlignment = Alignment.Center,
@@ -210,17 +362,30 @@ private fun ConversationArea(
         state = listState,
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
     ) {
-        itemsIndexed(messages) { _, message ->
-            MessageBubble(message)
-        }
-        if (showTransient) {
-            item(key = "transient") {
-                MessageBubble(
-                    ConversationMessage(ConversationRole.User, state.userText),
-                    transient = true,
-                )
+        itemsIndexed(messages, key = { index, _ -> index }) { _, message ->
+            when (message.role) {
+                ConversationRole.Notice -> NoticeChip(message.text)
+                else -> MessageBubble(message)
             }
+        }
+    }
+}
+
+@Composable
+private fun NoticeChip(text: String) {
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            )
         }
     }
 }
@@ -331,7 +496,11 @@ private fun RayaScreenLightPreview() {
     RayaTheme(darkTheme = false) {
         RayaScreen(
             state = RayaUiState(),
-            onTalkClick = {},
+            onSubmitText = {},
+            onVoiceChatClick = {},
+            onEndVoiceSession = {},
+            onToggleMicrophone = {},
+            onInterruptSpeech = {},
             onSettingsClick = {},
             onClearConversation = {},
         )
@@ -344,7 +513,31 @@ private fun RayaScreenDarkPreview() {
     RayaTheme(darkTheme = true) {
         RayaScreen(
             state = RayaUiState(),
-            onTalkClick = {},
+            onSubmitText = {},
+            onVoiceChatClick = {},
+            onEndVoiceSession = {},
+            onToggleMicrophone = {},
+            onInterruptSpeech = {},
+            onSettingsClick = {},
+            onClearConversation = {},
+        )
+    }
+}
+
+@Preview(name = "Raya voice controls", showBackground = true)
+@Composable
+private fun RayaVoiceControlsPreview() {
+    RayaTheme {
+        RayaScreen(
+            state = RayaUiState(
+                interactionMode = InteractionMode.Voice,
+                voiceSessionActive = true,
+            ),
+            onSubmitText = {},
+            onVoiceChatClick = {},
+            onEndVoiceSession = {},
+            onToggleMicrophone = {},
+            onInterruptSpeech = {},
             onSettingsClick = {},
             onClearConversation = {},
         )

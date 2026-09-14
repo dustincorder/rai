@@ -10,6 +10,7 @@ import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.dustincorder.rai.domain.RecognitionRequest
+import com.dustincorder.rai.domain.SpeechRecognitionErrorReason
 import com.dustincorder.rai.domain.SpeechRecognitionEvent
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
 import com.dustincorder.rai.domain.toLanguagePlan
@@ -43,7 +44,9 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
 
             override fun onResults(results: Bundle?) {
                 results?.firstText()?.let { _events.tryEmit(SpeechRecognitionEvent.Final(it, detectedLanguageTag)) }
-                    ?: _events.tryEmit(SpeechRecognitionEvent.Error("Речь не распознана."))
+                    ?: _events.tryEmit(
+                        SpeechRecognitionEvent.Error(SpeechRecognitionErrorReason.NoMatch, "Речь не распознана."),
+                    )
             }
 
             override fun onLanguageDetection(results: Bundle) {
@@ -53,7 +56,7 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
             }
 
             override fun onError(error: Int) {
-                _events.tryEmit(SpeechRecognitionEvent.Error(errorMessage(error)))
+                _events.tryEmit(errorMessage(error))
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -132,13 +135,29 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
     private fun Bundle.firstText(): String? =
         getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
 
-    private fun errorMessage(error: Int): String = when (error) {
-        SpeechRecognizer.ERROR_NO_MATCH -> "Не удалось распознать речь."
-        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Не удалось услышать речь."
-        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Нет разрешения на микрофон."
+    private fun errorMessage(error: Int): SpeechRecognitionEvent.Error = when (error) {
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> SpeechRecognitionEvent.Error(
+            SpeechRecognitionErrorReason.NoSpeech,
+            "Не удалось услышать речь.",
+        )
+        SpeechRecognizer.ERROR_NO_MATCH -> SpeechRecognitionEvent.Error(
+            SpeechRecognitionErrorReason.NoMatch,
+            "Не удалось распознать речь.",
+        )
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> SpeechRecognitionEvent.Error(
+            SpeechRecognitionErrorReason.Permission,
+            "Нет разрешения на микрофон.",
+        )
         SpeechRecognizer.ERROR_NETWORK,
-        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Сервис распознавания недоступен."
-        else -> "Ошибка распознавания речи ($error)."
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+        -> SpeechRecognitionEvent.Error(
+            SpeechRecognitionErrorReason.Network,
+            "Сервис распознавания недоступен.",
+        )
+        else -> SpeechRecognitionEvent.Error(
+            SpeechRecognitionErrorReason.Other,
+            "Ошибка распознавания речи ($error).",
+        )
     }
 
     private companion object {

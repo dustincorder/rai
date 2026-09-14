@@ -3,6 +3,7 @@ package com.dustincorder.rai.domain
 enum class ConversationRole {
     User,
     Assistant,
+    Notice,
 }
 
 data class ConversationMessage(

@@ -6,7 +6,15 @@ import java.util.Locale
 sealed interface SpeechRecognitionEvent {
     data class Partial(val text: String) : SpeechRecognitionEvent
     data class Final(val text: String, val detectedLanguageTag: String? = null) : SpeechRecognitionEvent
-    data class Error(val message: String) : SpeechRecognitionEvent
+    data class Error(val reason: SpeechRecognitionErrorReason, val message: String) : SpeechRecognitionEvent
+}
+
+sealed interface SpeechRecognitionErrorReason {
+    data object NoSpeech : SpeechRecognitionErrorReason
+    data object NoMatch : SpeechRecognitionErrorReason
+    data object Network : SpeechRecognitionErrorReason
+    data object Permission : SpeechRecognitionErrorReason
+    data object Other : SpeechRecognitionErrorReason
 }
 
 interface SpeechRecognitionProvider {

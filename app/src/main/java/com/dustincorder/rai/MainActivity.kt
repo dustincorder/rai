@@ -46,7 +46,7 @@ class MainActivity : ComponentActivity() {
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
                 hasMicrophonePermission = granted
-                if (granted) rayaViewModel.startVoiceFlow()
+                if (granted) rayaViewModel.startVoiceSession()
                 else rayaViewModel.showError("Разрешение на микрофон не предоставлено.")
             }
 
@@ -57,11 +57,16 @@ class MainActivity : ComponentActivity() {
                 } else {
                     RayaScreen(
                         state = uiState,
-                        onTalkClick = {
-                            if (uiState.isBusy) rayaViewModel.cancelListening()
-                            else if (hasMicrophonePermission) rayaViewModel.startVoiceFlow()
-                            else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        onSubmitText = { text -> rayaViewModel.submitText(text) },
+                        onVoiceChatClick = {
+                            if (!uiState.voiceSessionActive) {
+                                if (hasMicrophonePermission) rayaViewModel.startVoiceSession()
+                                else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
                         },
+                        onEndVoiceSession = { rayaViewModel.endVoiceSession() },
+                        onToggleMicrophone = { rayaViewModel.toggleMicrophone() },
+                        onInterruptSpeech = { rayaViewModel.interruptSpeech() },
                         onSettingsClick = { showSettings = true },
                         onClearConversation = { rayaViewModel.clearConversation() },
                     )

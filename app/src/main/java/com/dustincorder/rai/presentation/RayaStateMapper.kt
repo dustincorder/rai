@@ -1,6 +1,7 @@
 package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.presentation.model.RayaFaceState
@@ -10,10 +11,16 @@ fun rayaUiStateFor(
     state: RayaState,
     recognizedText: String = "",
     conversation: List<ConversationMessage> = emptyList(),
+    interactionMode: InteractionMode = InteractionMode.Text,
+    voiceSessionActive: Boolean = false,
+    microphoneEnabled: Boolean = true,
 ): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
         face = RayaFaceState(),
         conversation = conversation,
+        interactionMode = interactionMode,
+        voiceSessionActive = voiceSessionActive,
+        microphoneEnabled = microphoneEnabled,
     )
     RayaState.Listening -> RayaUiState(
         face = RayaFaceState(
@@ -24,6 +31,9 @@ fun rayaUiStateFor(
         userText = recognizedText,
         conversation = conversation,
         isBusy = true,
+        interactionMode = interactionMode,
+        voiceSessionActive = voiceSessionActive,
+        microphoneEnabled = microphoneEnabled,
     )
     RayaState.Thinking -> RayaUiState(
         face = RayaFaceState(
@@ -33,6 +43,9 @@ fun rayaUiStateFor(
         status = "Размышляю",
         conversation = conversation,
         isBusy = true,
+        interactionMode = interactionMode,
+        voiceSessionActive = voiceSessionActive,
+        microphoneEnabled = microphoneEnabled,
     )
     is RayaState.Speaking -> RayaUiState(
         face = RayaFaceState(
@@ -42,6 +55,9 @@ fun rayaUiStateFor(
         status = "Говорю",
         conversation = conversation,
         isBusy = true,
+        interactionMode = interactionMode,
+        voiceSessionActive = voiceSessionActive,
+        microphoneEnabled = microphoneEnabled,
     )
     is RayaState.Error -> RayaUiState(
         face = RayaFaceState(
@@ -51,5 +67,8 @@ fun rayaUiStateFor(
         status = "Сбой системы",
         conversation = conversation,
         errorMessage = state.message,
+        interactionMode = interactionMode,
+        voiceSessionActive = voiceSessionActive,
+        microphoneEnabled = microphoneEnabled,
     )
 }

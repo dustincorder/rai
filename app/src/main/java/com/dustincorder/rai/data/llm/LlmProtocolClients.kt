@@ -86,6 +86,7 @@ private val ConversationRole.transport: String
     get() = when (this) {
         ConversationRole.User -> "user"
         ConversationRole.Assistant -> "assistant"
+        ConversationRole.Notice -> error("Notice messages must never be sent to the LLM.")
     }
 
 private suspend fun OkHttpClient.await(request: Request, json: Json): String = suspendCancellableCoroutine { continuation ->
