@@ -25,21 +25,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.presentation.model.RayaFaceState
 import com.dustincorder.rai.presentation.model.RayaGaze
-import com.dustincorder.rai.ui.theme.Cyan
-import com.dustincorder.rai.ui.theme.CyanSoft
-import com.dustincorder.rai.ui.theme.Danger
 import com.dustincorder.rai.ui.theme.RayaTheme
-import com.dustincorder.rai.ui.theme.Screen
-import com.dustincorder.rai.ui.theme.Violet
-import kotlin.math.sin
+import kotlin.math.min
 import kotlin.random.Random
+
+private val EyeCyan = Color(0xFF00A8B5)
 
 @Composable
 fun RayaFace(
@@ -67,16 +63,14 @@ fun RayaFace(
     val gazeY by animateFloatAsState(state.gaze.verticalOffset, tween(420), label = "gaze-y")
     Canvas(
         modifier = modifier
-            .aspectRatio(0.92f)
-            .graphicsLayer {
-                translationY = if (state.emotion == RayaFaceEmotion.Calm) idleDrift * 1.2f else 0f
-            },
+            .aspectRatio(1.15f),
     ) {
-        drawDisplayFace(
+        drawFace(
             state = state,
             blinking = state.blinking || automaticBlink,
             gazeX = gazeX,
             gazeY = gazeY,
+            idleDrift = idleDrift,
             listeningPulse = listeningPulse,
             thinkingSweep = thinkingSweep,
             speakingPulse = speakingPulse,
@@ -87,9 +81,8 @@ fun RayaFace(
 
 private val RayaGaze.horizontalOffset: Float
     get() = when (this) {
-        RayaGaze.Center, RayaGaze.Up, RayaGaze.Down -> 0f
+        RayaGaze.Center, RayaGaze.Up, RayaGaze.Down, RayaGaze.Wide -> 0f
         RayaGaze.Alert -> 0.018f
-        RayaGaze.Wide -> 0f
     }
 
 private val RayaGaze.verticalOffset: Float
@@ -99,11 +92,12 @@ private val RayaGaze.verticalOffset: Float
         RayaGaze.Down -> 0.025f
     }
 
-private fun DrawScope.drawDisplayFace(
+private fun DrawScope.drawFace(
     state: RayaFaceState,
     blinking: Boolean,
     gazeX: Float,
     gazeY: Float,
+    idleDrift: Float,
     listeningPulse: Float,
     thinkingSweep: Float,
     speakingPulse: Float,
@@ -111,125 +105,117 @@ private fun DrawScope.drawDisplayFace(
 ) {
     val width = size.width
     val height = size.height
-    val eyeColor = when (state.emotion) {
-        RayaFaceEmotion.Error, RayaFaceEmotion.Concerned, RayaFaceEmotion.Angry -> Danger
-        RayaFaceEmotion.Thinking, RayaFaceEmotion.Curious -> Violet
-        else -> Cyan
+    val eyeSize = min(width, height) * 0.14f
+    val centerY = height * (0.48f + gazeY + if (state.emotion == RayaFaceEmotion.Calm) idleDrift * 0.004f else 0f)
+    val color = EyeCyan
+    val listeningScale = if (state.emotion == RayaFaceEmotion.Listening) 1f + listeningPulse * 0.08f else 1f
+    val speakingScale = if (state.emotion == RayaFaceEmotion.Speaking) 1f + speakingPulse * 0.06f else 1f
+    val shapeScale = listeningScale * speakingScale
+    val eyeHeight = when (state.emotion) {
+        RayaFaceEmotion.Surprised -> eyeSize * 1.35f
+        RayaFaceEmotion.Happy -> eyeSize * 0.58f
+        RayaFaceEmotion.Curious -> eyeSize * 1.12f
+        RayaFaceEmotion.Concerned -> eyeSize * 0.62f
+        RayaFaceEmotion.Error -> eyeSize * (0.72f + errorPulse * 0.18f)
+        else -> eyeSize
+    } * shapeScale
+    val eyeWidth = when (state.emotion) {
+        RayaFaceEmotion.Surprised -> eyeSize * 1.25f
+        RayaFaceEmotion.Happy -> eyeSize * 1.15f
+        RayaFaceEmotion.Error -> eyeSize * (0.9f + errorPulse * 0.1f)
+        else -> eyeSize
     }
-    val displayColor = if (state.emotion == RayaFaceEmotion.Error) {
-        Screen.copy(alpha = 0.86f + errorPulse * 0.14f)
-    } else {
-        Screen
+    val eyeAngle = when (state.emotion) {
+        RayaFaceEmotion.Angry -> -13f
+        RayaFaceEmotion.Concerned -> 10f
+        RayaFaceEmotion.Curious -> -6f
+        else -> 0f
     }
-    val displayBorder = if (state.emotion == RayaFaceEmotion.Speaking) {
-        Cyan.copy(alpha = 0.55f + speakingPulse * 0.45f)
-    } else {
-        Color(0xFF3A3970)
-    }
+    val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
 
-    drawRoundRect(
-        color = displayColor,
-        topLeft = point(width * 0.07f, height * 0.08f),
-        size = dimensions(width * 0.86f, height * 0.84f),
-        cornerRadius = radius(width * 0.045f),
-    )
-    drawRoundRect(
-        color = displayBorder,
-        topLeft = point(width * 0.07f, height * 0.08f),
-        size = dimensions(width * 0.86f, height * 0.84f),
-        cornerRadius = radius(width * 0.045f),
-        style = Stroke(width * 0.012f),
-    )
-    for (line in 1..8) {
-        val y = height * 0.08f + height * 0.84f * line / 9f
-        drawLine(
-            color = Color(0xFF514B86).copy(alpha = 0.13f),
-            start = point(width * 0.07f, y),
-            end = point(width * 0.93f, y),
-            strokeWidth = width * 0.0025f,
-        )
-    }
-
-    val eyeY = height * (0.43f + gazeY)
-    val eyePulse = if (state.emotion == RayaFaceEmotion.Speaking) 1f + speakingPulse * 0.08f else 1f
-    val eyeHeight = when {
-        blinking -> height * 0.012f
-        state.emotion == RayaFaceEmotion.Listening -> height * (0.078f + listeningPulse * 0.012f)
-        state.emotion == RayaFaceEmotion.Surprised -> height * 0.1f
-        state.emotion == RayaFaceEmotion.Happy -> height * 0.052f
-        state.emotion == RayaFaceEmotion.Curious -> height * 0.08f
-        state.emotion == RayaFaceEmotion.Concerned -> height * 0.052f
-        state.emotion == RayaFaceEmotion.Error -> height * 0.06f
-        else -> height * 0.065f
-    } * eyePulse
-    val eyeWidth = if (state.emotion == RayaFaceEmotion.Surprised || state.gaze == RayaGaze.Wide) width * 0.13f else width * 0.115f
-    drawPixelEye(width * (0.35f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion, blinking)
-    drawPixelEye(width * (0.65f + gazeX), eyeY, eyeWidth, eyeHeight, eyeColor, state.emotion, blinking)
+    drawEye(width * (0.36f + gazeX) - errorOffset, centerY, eyeWidth, eyeHeight, color, eyeAngle, blinking)
+    drawEye(width * (0.64f + gazeX) + errorOffset, centerY, eyeWidth, eyeHeight, color, -eyeAngle, blinking)
 
     when (state.emotion) {
-        RayaFaceEmotion.Thinking -> drawThinkingPattern(width, height, eyeColor, thinkingSweep)
-        RayaFaceEmotion.Surprised -> drawSurprisedMouth(width, height, eyeColor)
-        RayaFaceEmotion.Angry -> drawAngryExpression(width, height, eyeColor)
+        RayaFaceEmotion.Thinking -> drawThinkingDots(width, height, color, thinkingSweep)
+        RayaFaceEmotion.Surprised -> drawSurprisedMouth(width, height, color)
+        RayaFaceEmotion.Angry -> drawAngryMouth(width, height, color)
         else -> Unit
     }
+
 }
 
-private fun DrawScope.drawPixelEye(
+private fun DrawScope.drawEye(
     x: Float,
     y: Float,
-    eyeWidth: Float,
-    eyeHeight: Float,
+    width: Float,
+    height: Float,
     color: Color,
-    emotion: RayaFaceEmotion,
+    angle: Float,
     blinking: Boolean,
 ) {
-    drawRect(color, point(x - eyeWidth / 2f, y - eyeHeight / 2f), dimensions(eyeWidth, eyeHeight.coerceAtLeast(1f)))
-    if (blinking) return
-    val pupilSize = eyeWidth * 0.52f
-    drawRect(
-        color = Color(0xFF10132D),
-        topLeft = point(x - pupilSize / 2f, y - pupilSize / 2f),
-        size = dimensions(pupilSize, pupilSize),
-    )
-    if (emotion == RayaFaceEmotion.Angry) {
-        drawRect(Color(0xFF0A0B1D), point(x - pupilSize / 2f, y - pupilSize / 2f), dimensions(pupilSize, pupilSize))
+    val closedHeight = size.height * 0.012f
+    withTransform({ rotate(angle, pivot = point(x, y)) }) {
+        drawRect(
+            color = color,
+            topLeft = point(x - width / 2f, y - if (blinking) closedHeight / 2f else height / 2f),
+            size = dimensions(width, if (blinking) closedHeight else height),
+        )
     }
 }
 
-private fun DrawScope.drawThinkingPattern(width: Float, height: Float, color: Color, sweep: Float) {
+private fun DrawScope.drawThinkingDots(width: Float, height: Float, color: Color, sweep: Float) {
     repeat(3) { index ->
         val alpha = 0.25f + ((sweep * 3f - index).coerceIn(0f, 1f) * 0.75f)
-        drawRect(color.copy(alpha = alpha), point(width * (0.43f + index * 0.07f), height * 0.57f), dimensions(width * 0.035f, width * 0.035f))
+        drawCircle(color.copy(alpha = alpha), radius = width * 0.012f, center = point(width * (0.46f + index * 0.04f), height * 0.7f))
     }
 }
 
 private fun DrawScope.drawSurprisedMouth(width: Float, height: Float, color: Color) {
-    drawRoundRect(color, point(width * 0.45f, height * 0.55f), dimensions(width * 0.1f, height * 0.085f), radius(width * 0.02f))
-    drawRect(Color(0xFF10132D), point(width * 0.475f, height * 0.57f), dimensions(width * 0.05f, height * 0.045f))
+    drawRect(color, point(width * 0.47f, height * 0.63f), dimensions(width * 0.06f, height * 0.1f))
 }
 
-private fun DrawScope.drawAngryExpression(width: Float, height: Float, color: Color) {
-    drawLine(color, point(width * 0.27f, height * 0.36f), point(width * 0.43f, height * 0.4f), width * 0.018f, StrokeCap.Square)
-    drawLine(color, point(width * 0.73f, height * 0.36f), point(width * 0.57f, height * 0.4f), width * 0.018f, StrokeCap.Square)
-    drawLine(color, point(width * 0.42f, height * 0.6f), point(width * 0.5f, height * 0.57f), width * 0.016f, StrokeCap.Square)
-    drawLine(color, point(width * 0.5f, height * 0.57f), point(width * 0.58f, height * 0.6f), width * 0.016f, StrokeCap.Square)
+private fun DrawScope.drawAngryMouth(width: Float, height: Float, color: Color) {
+    drawLine(color, point(width * 0.44f, height * 0.69f), point(width * 0.5f, height * 0.66f), width * 0.018f, StrokeCap.Square)
+    drawLine(color, point(width * 0.5f, height * 0.66f), point(width * 0.56f, height * 0.69f), width * 0.018f, StrokeCap.Square)
 }
 
 private fun point(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(x, y)
 private fun dimensions(width: Float, height: Float) = androidx.compose.ui.geometry.Size(width, height)
-private fun radius(value: Float) = androidx.compose.ui.geometry.CornerRadius(value)
 
-@Preview(showBackground = true, backgroundColor = 0xFF080914)
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD)
 @Composable
 private fun RayaFacePreview() {
     RayaTheme {
         Box(modifier = Modifier.fillMaxWidth().widthIn(max = 390.dp)) {
-            RayaFace(state = RayaFaceState(emotion = RayaFaceEmotion.Surprised))
+            RayaFace(state = RayaFaceState(emotion = RayaFaceEmotion.Calm))
         }
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF080914, widthDp = 480, heightDp = 1_400)
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, name = "Angry cyan eyes")
+@Composable
+private fun RayaFaceAngryPreview() {
+    RayaTheme {
+        RayaFace(
+            state = RayaFaceState(emotion = RayaFaceEmotion.Angry),
+            modifier = Modifier.size(280.dp),
+        )
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, name = "Error no mouth")
+@Composable
+private fun RayaFaceErrorPreview() {
+    RayaTheme {
+        RayaFace(
+            state = RayaFaceState(emotion = RayaFaceEmotion.Error),
+            modifier = Modifier.size(280.dp),
+        )
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, widthDp = 480, heightDp = 1_400)
 @Composable
 private fun RayaFaceExpressionGridPreview() {
     RayaTheme {
