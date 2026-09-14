@@ -16,7 +16,8 @@ class RayaOrchestratorTest {
     fun `voice flow reaches speaking after final recognition and idle after tts`() = runTest {
         val recognition = FakeRecognitionProvider()
         val synthesis = FakeSynthesisProvider()
-        val orchestrator = RayaOrchestrator(this, recognition, synthesis, FakeReplyProvider())
+        val reply = FakeReplyProvider(waitForReply = true)
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
 
         orchestrator.startVoiceFlow()
         runCurrent()
@@ -27,6 +28,10 @@ class RayaOrchestratorTest {
         assertEquals("Прив", orchestrator.userText.value)
 
         recognition.emit(SpeechRecognitionEvent.Final("Привет"))
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+
+        reply.complete()
         runCurrent()
         assertEquals(RayaState.Speaking("Я тебя слышу."), orchestrator.state.value)
         assertEquals("Привет", orchestrator.userText.value)
@@ -116,6 +121,16 @@ private class FakeSynthesisProvider(
     }
 }
 
-private class FakeReplyProvider : ReplyProvider {
-    override suspend fun reply(input: String): String = "Я тебя слышу."
+private class FakeReplyProvider(
+    private val waitForReply: Boolean = false,
+) : ReplyProvider {
+    private val response = CompletableDeferred<String>()
+
+    override suspend fun reply(input: String): String {
+        return if (waitForReply) response.await() else "Я тебя слышу."
+    }
+
+    fun complete() {
+        response.complete("Я тебя слышу.")
+    }
 }
