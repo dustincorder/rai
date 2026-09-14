@@ -1,10 +1,10 @@
 package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.domain.RayaState
-import com.dustincorder.rai.ui.raya.face.RayaAntennaMotion
-import com.dustincorder.rai.ui.raya.face.RayaFaceEmotion
-import com.dustincorder.rai.ui.raya.face.RayaFaceState
-import com.dustincorder.rai.ui.raya.face.RayaGaze
+import com.dustincorder.rai.presentation.model.RayaAntennaMotion
+import com.dustincorder.rai.presentation.model.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaFaceState
+import com.dustincorder.rai.presentation.model.RayaGaze
 
 fun rayaUiStateFor(state: RayaState): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(

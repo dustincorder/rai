@@ -1,6 +1,6 @@
 package com.dustincorder.rai.presentation
 
-import com.dustincorder.rai.ui.raya.face.RayaFaceState
+import com.dustincorder.rai.presentation.model.RayaFaceState
 
 data class RayaUiState(
     val face: RayaFaceState = RayaFaceState(),

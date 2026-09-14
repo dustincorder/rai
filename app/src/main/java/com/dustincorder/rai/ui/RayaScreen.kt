@@ -1,9 +1,5 @@
 package com.dustincorder.rai.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -50,7 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dustincorder.rai.presentation.RayaUiState
 import com.dustincorder.rai.ui.raya.face.RayaFace
-import com.dustincorder.rai.ui.raya.face.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.theme.Cyan
 import com.dustincorder.rai.ui.theme.CyanSoft
 import com.dustincorder.rai.ui.theme.Danger
@@ -113,18 +109,12 @@ fun RayaScreen(
         ) {
             Spacer(Modifier.height(16.dp))
 
-            AnimatedContent(
-                targetState = state.face,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "raya-face-transition",
-            ) { faceState ->
-                RayaFace(
-                    state = faceState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 390.dp),
-                )
-            }
+            RayaFace(
+                state = state.face,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 390.dp),
+            )
 
             Spacer(Modifier.height(12.dp))
             StatusPill(state = state)

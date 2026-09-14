@@ -37,6 +37,10 @@ import com.dustincorder.rai.ui.theme.Screen
 import com.dustincorder.rai.ui.theme.Violet
 import kotlin.math.sin
 import kotlin.random.Random
+import com.dustincorder.rai.presentation.model.RayaAntennaMotion
+import com.dustincorder.rai.presentation.model.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaFaceState
+import com.dustincorder.rai.presentation.model.RayaGaze
 
 @Composable
 fun RayaFace(

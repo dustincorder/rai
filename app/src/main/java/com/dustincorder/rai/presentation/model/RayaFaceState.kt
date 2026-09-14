@@ -1,4 +1,4 @@
-package com.dustincorder.rai.ui.raya.face
+package com.dustincorder.rai.presentation.model
 
 enum class RayaFaceEmotion {
     Calm,
@@ -26,7 +26,7 @@ enum class RayaAntennaMotion {
     Alert,
 }
 
-/** Visual-only state. Domain orchestration must not depend on these fields. */
+/** Visual state produced by presentation and rendered by the face UI. */
 data class RayaFaceState(
     val emotion: RayaFaceEmotion = RayaFaceEmotion.Calm,
     val blinking: Boolean = false,

@@ -1,7 +1,7 @@
 package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.domain.RayaState
-import com.dustincorder.rai.ui.raya.face.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
