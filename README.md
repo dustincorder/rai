@@ -4,7 +4,7 @@
 
 ### An open-source voice assistant for Android
 
-A small, expressive AI assistant built with Kotlin, Jetpack Compose and Material 3.
+A small, expressive AI assistant built with Kotlin, Jetpack Compose and Material 3, with configurable compatible LLM providers.
 
 Inspired by **Raya-Prime**, reimagined as a modern Android assistant rather than a replica of the original character.
 
@@ -49,15 +49,17 @@ The project already includes:
 - ✅ microphone runtime permission flow
 - ✅ voice interaction state machine
 - ✅ Russian speech support
+- ✅ multilingual conversation modes
+- ✅ OpenAI-compatible and Anthropic-compatible LLM APIs
+- ✅ OpenAI, Groq, Anthropic and Custom provider settings
+- ✅ encrypted API key storage backed by Android Keystore
+- ✅ Raya name addressing
 - ✅ unit-tested orchestration layer
 
 Currently in development:
 
-- 🚧 configurable LLM providers
-- 🚧 OpenAI-compatible API support
-- 🚧 Anthropic-compatible API support
-- 🚧 multilingual conversation mode
-- 🚧 addressing Raya by name
+- 🚧 conversation context and memory
+- 🚧 richer assistant tools and device integrations
 
 Planned:
 
@@ -164,27 +166,30 @@ This keeps the voice pipeline testable and makes providers replaceable.
 - Kotlin Coroutines
 - StateFlow
 
-Additional networking and persistence components are introduced only when required.
+- OkHttp
+- kotlinx.serialization
+- Preferences DataStore
+- Android Keystore
 
 ## 🤖 LLM providers
 
-Raya is being designed around protocol compatibility rather than hardcoded vendor SDKs.
+Raya uses protocol compatibility rather than hardcoded vendor SDKs.
 
-Planned built-in presets include:
+Built-in presets include:
 
 - OpenAI
 - Groq
 - Anthropic
 - Custom provider
 
-The network layer will support:
+The network layer supports:
 
 ```text
 OpenAI-compatible APIs
 Anthropic-compatible APIs
 ```
 
-Custom providers will be able to use their own base URL and model ID.
+Custom providers can use their own HTTPS base URL, protocol and model ID.
 
 API credentials are user-provided and must never be committed to the repository.
 
@@ -262,19 +267,19 @@ app/build/outputs/apk/debug/
 - [x] Android TTS
 - [x] partial transcription
 - [x] cancellation and error handling
-- [ ] multilingual speech
+- [x] multilingual speech
 - [ ] local neural Raya voice
 
 ### Intelligence
-- [ ] OpenAI-compatible LLM provider
-- [ ] Anthropic-compatible LLM provider
-- [ ] provider settings
+- [x] OpenAI-compatible LLM provider
+- [x] Anthropic-compatible LLM provider
+- [x] provider settings
 - [ ] conversation context
 - [ ] long-term memory
 - [ ] personality / lore behavior
 
 ### Interaction
-- [ ] Raya name addressing
+- [x] Raya name addressing
 - [ ] optional wake word
 - [ ] device context
 - [ ] explicit device actions

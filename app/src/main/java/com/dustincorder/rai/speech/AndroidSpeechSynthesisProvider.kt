@@ -44,7 +44,7 @@ class AndroidSpeechSynthesisProvider(context: Context) : SpeechSynthesisProvider
         if (languageResult == TextToSpeech.LANG_MISSING_DATA ||
             languageResult == TextToSpeech.LANG_NOT_SUPPORTED
         ) {
-            error("Русский язык синтеза речи недоступен.")
+            error("Язык синтеза речи ${locale.toLanguageTag()} недоступен.")
         }
 
         suspendCancellableCoroutine { continuation ->

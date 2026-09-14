@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Cleartext allowed at OS level; app-level policy in requireTransportAllowed()
+         permits HTTP only for Custom provider with customAllowInsecureHttp == true. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

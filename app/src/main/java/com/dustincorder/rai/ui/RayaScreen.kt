@@ -19,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -31,12 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -53,8 +47,8 @@ import com.dustincorder.rai.ui.theme.RayaTheme
 fun RayaScreen(
     state: RayaUiState,
     onTalkClick: () -> Unit,
+    onSettingsClick: () -> Unit,
 ) {
-    var showSettings by remember { mutableStateOf(false) }
     val canCancel = state.face.emotion == RayaFaceEmotion.Listening
     val buttonEnabled = !state.isBusy || canCancel
 
@@ -73,7 +67,7 @@ fun RayaScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showSettings = true }) {
+                    IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Outlined.Settings, contentDescription = "Настройки")
                     }
                 },
@@ -120,7 +114,7 @@ fun RayaScreen(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "Распознавание речи на русском языке",
+                "Язык разговора можно изменить в настройках",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -128,25 +122,14 @@ fun RayaScreen(
         }
     }
 
-    if (showSettings) {
-        AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text("Настройки") },
-            text = { Text("Настройки голосовых провайдеров появятся на следующем этапе.") },
-            confirmButton = {
-                TextButton(onClick = { showSettings = false }) {
-                    Text("ПОНЯТНО")
-                }
-            },
-        )
-    }
 }
 
 @Composable
 private fun StatusChip(state: RayaUiState) {
+    val isError = state.face.emotion == RayaFaceEmotion.Error
     Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = if (isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+        contentColor = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
         shape = MaterialTheme.shapes.large,
     ) {
         Row(
@@ -210,6 +193,7 @@ private fun RayaScreenLightPreview() {
         RayaScreen(
             state = RayaUiState(),
             onTalkClick = {},
+            onSettingsClick = {},
         )
     }
 }
@@ -221,6 +205,7 @@ private fun RayaScreenDarkPreview() {
         RayaScreen(
             state = RayaUiState(),
             onTalkClick = {},
+            onSettingsClick = {},
         )
     }
 }

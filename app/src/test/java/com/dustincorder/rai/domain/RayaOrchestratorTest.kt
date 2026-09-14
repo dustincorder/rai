@@ -80,6 +80,138 @@ class RayaOrchestratorTest {
         assertEquals(RayaState.Idle, orchestrator.state.value)
         assertEquals(1, recognition.cancelCount)
     }
+
+    @Test
+    fun `only Raya name uses local response without LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Райя", "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("Я здесь."), orchestrator.state.value)
+        assertEquals(0, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `real stt spelling ray a uses local response without LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая", "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("Я здесь."), orchestrator.state.value)
+        assertEquals(0, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `ellipsis separated names still bypass the LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая… Райя", "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("Я здесь."), orchestrator.state.value)
+        assertEquals(0, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `repeated real stt names before a request still reach the LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, Райя, расскажи про Марс", "ru-RU"))
+        runCurrent()
+
+        assertEquals("расскажи про Марс", reply.lastInput)
+        assertEquals(1, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `local name response uses resolved language`() = runTest {
+        val cases = listOf(
+            "ru-RU" to "Я здесь.",
+            "uk-UA" to "Я тут.",
+            "en-US" to "I'm here.",
+        )
+        cases.forEach { (tag, expected) ->
+            val recognition = FakeRecognitionProvider()
+            val synthesis = FakeSynthesisProvider()
+            val orchestrator = RayaOrchestrator(
+                this,
+                recognition,
+                synthesis,
+                FakeReplyProvider(),
+                languageProvider = object : ConversationLanguageProvider {
+                    override suspend fun currentLanguage(): ConversationLanguage = ConversationLanguage.Auto
+                },
+                systemLanguageTag = { "ru-RU" },
+            )
+
+            orchestrator.startVoiceFlow()
+            runCurrent()
+            recognition.emit(SpeechRecognitionEvent.Final("Райя", tag))
+            runCurrent()
+
+            assertEquals(RayaState.Speaking(expected), orchestrator.state.value)
+            synthesis.complete()
+            runCurrent()
+        }
+    }
+
+    @Test
+    fun `detected language reaches reply and TTS`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(
+            this,
+            recognition,
+            synthesis,
+            reply,
+            languageProvider = object : ConversationLanguageProvider {
+                override suspend fun currentLanguage(): ConversationLanguage = ConversationLanguage.Auto
+            },
+            systemLanguageTag = { "ru-RU" },
+        )
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Raya, hello", "en-US"))
+        runCurrent()
+
+        assertEquals("hello", reply.lastInput)
+        assertEquals("en-US", reply.lastLanguageTag)
+        assertEquals("en-US", synthesis.lastLocale?.toLanguageTag())
+        synthesis.complete()
+        runCurrent()
+    }
 }
 
 private class FakeRecognitionProvider : SpeechRecognitionProvider {
@@ -87,7 +219,7 @@ private class FakeRecognitionProvider : SpeechRecognitionProvider {
     override val events: SharedFlow<SpeechRecognitionEvent> = _events
     var cancelCount = 0
 
-    override fun startListening(locale: Locale) = Unit
+    override suspend fun startListening(request: RecognitionRequest) = Unit
 
     override fun cancel() {
         cancelCount++
@@ -104,8 +236,10 @@ private class FakeSynthesisProvider(
     private val fail: Boolean = false,
 ) : SpeechSynthesisProvider {
     private var completion = CompletableDeferred<Unit>()
+    var lastLocale: Locale? = null
 
     override suspend fun speak(text: String, locale: Locale) {
+        lastLocale = locale
         if (fail) error("TTS failure")
         completion.await()
     }
@@ -125,8 +259,14 @@ private class FakeReplyProvider(
     private val waitForReply: Boolean = false,
 ) : ReplyProvider {
     private val response = CompletableDeferred<String>()
+    var callCount = 0
+    var lastInput: String? = null
+    var lastLanguageTag: String? = null
 
-    override suspend fun reply(input: String): String {
+    override suspend fun reply(input: String, languageTag: String?): String {
+        callCount++
+        lastInput = input
+        lastLanguageTag = languageTag
         return if (waitForReply) response.await() else "Я тебя слышу."
     }
 
