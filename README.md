@@ -2,7 +2,7 @@
 
 Open-source Android foundation for «Райя» — a stylized AI assistant inspired by Raya-Prime from the Lololoshka story seasons.
 
-Current version includes Android speech recognition and Russian text-to-speech, but no LLM, network services, Firebase, analytics, or API keys.
+Current version includes Android speech recognition, Android text-to-speech, and configurable OpenAI-compatible or Anthropic-compatible LLM access. Firebase and analytics are not included.
 
 ## Stack
 
@@ -33,7 +33,7 @@ Idle -> Listening -> Thinking -> Speaking -> Idle
 
 The transition sequence belongs to `RayaOrchestrator`, not a Composable. `AndroidSpeechRecognitionProvider` and `AndroidSpeechSynthesisProvider` hide Android APIs behind domain contracts. The ViewModel maps domain state to `RayaUiState`; `RayaScreen` only renders it and sends user actions upward.
 
-The app requests `RECORD_AUDIO` only after the user presses the microphone button. Recognition uses `ru-RU` by default, and TTS keeps `Speaking` active until the utterance completes.
+The app requests `RECORD_AUDIO` only after the user presses the microphone button. Conversation language can follow automatic detection, the device language, or an explicit BCP-47 language. TTS keeps `Speaking` active until the utterance completes.
 
 ## Structure
 
@@ -52,7 +52,7 @@ app/src/main/java/com/dustincorder/rai/
 └── MainActivity.kt
 ```
 
-`ReplyProvider` is currently backed by `MockReplyProvider`; LLM integration remains out of scope. Speech providers are real Android implementations, while unit tests use fakes.
+`ReplyProvider` reads current settings before every request and supports OpenAI, Groq, Anthropic, and custom compatible endpoints. Nonsecret settings use DataStore; API keys are encrypted with an Android Keystore AES/GCM key. Speech and network unit tests use fakes or MockWebServer and never call real APIs.
 
 ## License
 

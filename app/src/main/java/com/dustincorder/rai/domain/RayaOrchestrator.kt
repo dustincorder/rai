@@ -16,6 +16,10 @@ class RayaOrchestrator(
     private val speechRecognition: SpeechRecognitionProvider,
     private val speechSynthesis: SpeechSynthesisProvider,
     private val replyProvider: ReplyProvider,
+    private val languageProvider: ConversationLanguageProvider = object : ConversationLanguageProvider {
+        override suspend fun currentLanguage(): ConversationLanguage = ConversationLanguage.System
+    },
+    private val systemLanguageTag: () -> String = { Locale.getDefault().toLanguageTag() },
 ) {
     private val _state = MutableStateFlow<RayaState>(RayaState.Idle)
     val state: StateFlow<RayaState> = _state.asStateFlow()
@@ -25,7 +29,7 @@ class RayaOrchestrator(
 
     private var voiceJob: Job? = null
 
-    fun startVoiceFlow(locale: Locale = Locale("ru", "RU")) {
+    fun startVoiceFlow() {
         if (voiceJob?.isActive == true) return
         if (_state.value is RayaState.Error) {
             _state.value = RayaState.Idle
@@ -33,17 +37,17 @@ class RayaOrchestrator(
         if (_state.value != RayaState.Idle) return
 
         voiceJob = scope.launch {
-            val finalText = CompletableDeferred<String>()
+            val finalResult = CompletableDeferred<SpeechRecognitionEvent.Final>()
             val recognitionJob = launch {
                 speechRecognition.events.collect { event ->
                     when (event) {
                         is SpeechRecognitionEvent.Partial -> _userText.value = event.text
                         is SpeechRecognitionEvent.Final -> {
                             _userText.value = event.text
-                            finalText.complete(event.text)
+                            finalResult.complete(event)
                         }
                         is SpeechRecognitionEvent.Error -> {
-                            finalText.completeExceptionally(RecognitionException(event.message))
+                            finalResult.completeExceptionally(RecognitionException(event.message))
                         }
                     }
                 }
@@ -52,8 +56,11 @@ class RayaOrchestrator(
             try {
                 _userText.value = ""
                 _state.value = RayaState.Listening
-                speechRecognition.startListening(locale)
-                val recognizedText = finalText.await().trim()
+                val language = languageProvider.currentLanguage()
+                val systemTag = systemLanguageTag()
+                speechRecognition.startListening(RecognitionRequest(language, systemTag))
+                val result = finalResult.await()
+                val recognizedText = result.text.trim()
                 recognitionJob.cancelAndJoin()
 
                 if (recognizedText.isEmpty()) {
@@ -61,9 +68,15 @@ class RayaOrchestrator(
                 }
 
                 _state.value = RayaState.Thinking
-                val response = replyProvider.reply(recognizedText)
+                val addressing = RayaAddressingParser.parse(recognizedText)
+                val resolvedLanguageTag = language.resolveLanguageTag(result.detectedLanguageTag, systemTag)
+                val response = if (addressing.addressed && addressing.query.isBlank()) {
+                    "Я здесь."
+                } else {
+                    replyProvider.reply(addressing.query.ifBlank { recognizedText }, resolvedLanguageTag)
+                }
                 _state.value = RayaState.Speaking(response)
-                speechSynthesis.speak(response, locale)
+                speechSynthesis.speak(response, Locale.forLanguageTag(resolvedLanguageTag))
                 _state.value = RayaState.Idle
             } catch (cancellation: CancellationException) {
                 throw cancellation
