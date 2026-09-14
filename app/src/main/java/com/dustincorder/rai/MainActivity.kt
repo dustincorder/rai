@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                             else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         },
                         onSettingsClick = { showSettings = true },
+                        onClearConversation = { rayaViewModel.clearConversation() },
                     )
                 }
             }

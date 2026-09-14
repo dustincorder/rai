@@ -1,6 +1,8 @@
 package com.dustincorder.rai.data.llm
 
 import com.dustincorder.rai.data.settings.resolveEndpointUrl
+import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.ConversationRole
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -20,9 +22,21 @@ class OpenAiCompatibleReplyProvider(
     private val client: OkHttpClient,
     private val json: Json,
 ) {
-    suspend fun reply(baseUrl: String, model: String, apiKey: String?, systemPrompt: String, input: String): String {
+    suspend fun reply(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        systemPrompt: String,
+        messages: List<ConversationMessage>,
+    ): String {
         val body = json.encodeToString(
-            OpenAiRequest(model, listOf(OpenAiMessage("system", systemPrompt), OpenAiMessage("user", input))),
+            OpenAiRequest(
+                model,
+                buildList {
+                    add(OpenAiMessage("system", systemPrompt))
+                    messages.forEach { message -> add(OpenAiMessage(message.role.transport, message.text)) }
+                },
+            ),
         )
         val request = Request.Builder()
             .url(resolveEndpointUrl(baseUrl, listOf("chat", "completions")))
@@ -40,9 +54,20 @@ class AnthropicCompatibleReplyProvider(
     private val client: OkHttpClient,
     private val json: Json,
 ) {
-    suspend fun reply(baseUrl: String, model: String, apiKey: String?, systemPrompt: String, input: String): String {
+    suspend fun reply(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        systemPrompt: String,
+        messages: List<ConversationMessage>,
+    ): String {
         val body = json.encodeToString(
-            AnthropicRequest(model = model, maxTokens = 512, system = systemPrompt, messages = listOf(AnthropicMessage("user", input))),
+            AnthropicRequest(
+                model = model,
+                maxTokens = 512,
+                system = systemPrompt,
+                messages = messages.map { message -> AnthropicMessage(message.role.transport, message.text) },
+            ),
         )
         val request = Request.Builder()
             .url(resolveEndpointUrl(baseUrl, listOf("messages")))
@@ -56,6 +81,12 @@ class AnthropicCompatibleReplyProvider(
             ?: error("Провайдер вернул пустой ответ.")
     }
 }
+
+private val ConversationRole.transport: String
+    get() = when (this) {
+        ConversationRole.User -> "user"
+        ConversationRole.Assistant -> "assistant"
+    }
 
 private suspend fun OkHttpClient.await(request: Request, json: Json): String = suspendCancellableCoroutine { continuation ->
     val call = newCall(request)

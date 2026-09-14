@@ -36,11 +36,13 @@ class RayaViewModel(
     val uiState: StateFlow<RayaUiState> = combine(
         orchestrator.state,
         orchestrator.userText,
-    ) { state, userText -> rayaUiStateFor(state, userText) }
+        orchestrator.conversation,
+    ) { state, userText, conversation -> rayaUiStateFor(state, userText, conversation) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RayaUiState())
 
     fun startVoiceFlow() = orchestrator.startVoiceFlow()
     fun cancelListening() = orchestrator.cancelListening()
+    fun clearConversation() = orchestrator.clearConversation()
     fun showError(message: String) = orchestrator.reportError(message)
 
     override fun onCleared() {

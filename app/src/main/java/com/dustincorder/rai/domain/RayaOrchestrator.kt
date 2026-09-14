@@ -32,6 +32,9 @@ class RayaOrchestrator(
     private val _userText = MutableStateFlow("")
     val userText: StateFlow<String> = _userText.asStateFlow()
 
+    private val _conversation = MutableStateFlow<List<ConversationMessage>>(emptyList())
+    val conversation: StateFlow<List<ConversationMessage>> = _conversation.asStateFlow()
+
     private var voiceJob: Job? = null
 
     fun startVoiceFlow() {
@@ -78,11 +81,17 @@ class RayaOrchestrator(
                 val queryBlank = addressing.query.isBlank()
                 val localResponse = addressing.addressed && queryBlank
                 routingDiagnostics.record(addressing.addressed, queryBlank, localResponse)
+                val userMessage = ConversationMessage(
+                    ConversationRole.User,
+                    addressing.query.ifBlank { recognizedText },
+                )
+                _conversation.value = appendMessage(userMessage)
                 val response = if (localResponse) {
                     localNameResponse(resolvedLanguageTag)
                 } else {
-                    replyProvider.reply(addressing.query.ifBlank { recognizedText }, resolvedLanguageTag)
+                    replyProvider.reply(conversationContext(), resolvedLanguageTag)
                 }
+                _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response))
                 _state.value = RayaState.Speaking(response)
                 speechSynthesis.speak(response, Locale.forLanguageTag(resolvedLanguageTag))
                 _state.value = RayaState.Idle
@@ -125,6 +134,10 @@ class RayaOrchestrator(
         _state.value = RayaState.Idle
     }
 
+    fun clearConversation() {
+        _conversation.value = emptyList()
+    }
+
     fun close() {
         voiceJob?.cancel()
         speechRecognition.cancel()
@@ -134,4 +147,15 @@ class RayaOrchestrator(
     }
 
     class RecognitionException(message: String) : RuntimeException(message)
+
+    private fun appendMessage(message: ConversationMessage): List<ConversationMessage> =
+        (_conversation.value + message).takeLast(MAX_CONVERSATION_MESSAGES)
+
+    private fun conversationContext(): List<ConversationMessage> =
+        _conversation.value.takeLast(MAX_LLM_CONTEXT_MESSAGES)
+
+    companion object {
+        const val MAX_LLM_CONTEXT_MESSAGES = 20
+        const val MAX_CONVERSATION_MESSAGES = 100
+    }
 }
