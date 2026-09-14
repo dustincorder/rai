@@ -1,6 +1,7 @@
 package com.dustincorder.rai.data.settings
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -29,6 +30,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             customBaseUrl = preferences[BASE_URL].orEmpty(),
             modelId = preferences[MODEL] ?: provider.defaultModel,
             conversationLanguage = decodeLanguage(preferences[LANGUAGE] ?: "auto"),
+            customAllowInsecureHttp = preferences[ALLOW_INSECURE_HTTP] ?: false,
         )
     }
 
@@ -39,6 +41,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             it[BASE_URL] = settings.customBaseUrl
             it[MODEL] = settings.modelId
             it[LANGUAGE] = encodeLanguage(settings.conversationLanguage)
+            it[ALLOW_INSECURE_HTTP] = settings.customAllowInsecureHttp
         }
     }
 
@@ -67,5 +70,6 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
         val BASE_URL = stringPreferencesKey("custom_base_url")
         val MODEL = stringPreferencesKey("model")
         val LANGUAGE = stringPreferencesKey("conversation_language")
+        val ALLOW_INSECURE_HTTP = booleanPreferencesKey("custom_allow_insecure_http")
     }
 }

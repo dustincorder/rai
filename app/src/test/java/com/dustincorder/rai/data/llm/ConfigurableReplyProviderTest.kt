@@ -1,5 +1,6 @@
 package com.dustincorder.rai.data.llm
 
+import com.dustincorder.rai.data.secrets.ApiKeyStorageException
 import com.dustincorder.rai.data.secrets.ApiKeyStore
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
@@ -58,7 +59,8 @@ class ConfigurableReplyProviderTest {
     @Test
     fun `missing provider configuration avoids network request`() = runTest {
         val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
-        assertTrue(failure is LlmConfigurationException)
+        assertTrue(failure is LlmSafeException)
+        assertEquals("API key не сохранён.", failure?.message)
         assertEquals(0, server.requestCount)
     }
 
@@ -151,7 +153,7 @@ class ConfigurableReplyProviderTest {
         )
         val result = provider.testConnection(keyedConfig.connectionConfig(), "")
 
-        assertEquals(LlmConnectionResult.Failure("Укажите API key провайдера."), result)
+        assertEquals(LlmConnectionResult.Failure("API key не сохранён."), result)
         assertEquals(0, server.requestCount)
     }
 
@@ -182,9 +184,91 @@ class ConfigurableReplyProviderTest {
         keyStore.storedKey = null
         val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
 
-        assertTrue(failure is LlmConfigurationException)
+        assertTrue(failure is LlmSafeException)
         assertEquals(0, server.requestCount)
         assertEquals("Настрой LLM-провайдера.", failure?.message)
+    }
+
+    @Test
+    fun `production reply reports missing api key`() = runTest {
+        repository.save(AppSettings(provider = LlmProviderPreset.Groq, modelId = "model"))
+        keyStore.storedKey = null
+        val failure = runCatching { provider.reply("hello", "en-US") }.exceptionOrNull()
+
+        assertTrue(failure is LlmSafeException)
+        assertEquals("API key не сохранён.", failure?.message)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `connection test maps stored key read failure to safe message`() = runTest {
+        keyStore.failRead = true
+        val config = LlmConnectionConfig(
+            provider = LlmProviderPreset.Groq,
+            protocol = LlmProtocol.OpenAiCompatible,
+            baseUrl = server.url("/v1").toString().trimEnd('/'),
+            modelId = "model",
+        )
+        val result = provider.testConnection(config, "")
+
+        assertTrue(result is LlmConnectionResult.Failure)
+        assertEquals(
+            "Не удалось прочитать сохранённый API key. Замените или удалите его.",
+            (result as LlmConnectionResult.Failure).message,
+        )
+    }
+
+    @Test
+    fun `custom connection test rejects http when insecure disabled`() = runTest {
+        val config = LlmConnectionConfig(
+            provider = LlmProviderPreset.Custom,
+            protocol = LlmProtocol.OpenAiCompatible,
+            baseUrl = "http://192.168.1.2:8080/v1",
+            modelId = "model",
+        )
+        val result = provider.testConnection(config, null)
+
+        assertTrue(result is LlmConnectionResult.Failure)
+        assertEquals("HTTP для Custom provider отключён. Разрешите его в настройках.", (result as LlmConnectionResult.Failure).message)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `custom connection test allows http when explicitly enabled`() = runTest {
+        val httpServer = MockWebServer()
+        httpServer.start()
+        try {
+            httpServer.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+            val config = LlmConnectionConfig(
+                provider = LlmProviderPreset.Custom,
+                protocol = LlmProtocol.OpenAiCompatible,
+                baseUrl = httpServer.url("/v1").toString().trimEnd('/'),
+                modelId = "model",
+                allowInsecureHttp = true,
+            )
+            val result = provider.testConnection(config, null)
+
+            assertEquals(LlmConnectionResult.Success, result)
+            assertEquals("/v1/chat/completions", httpServer.takeRequest().path)
+        } finally {
+            httpServer.shutdown()
+        }
+    }
+
+    @Test
+    fun `builtin providers never allow http transport`() = runTest {
+        val config = LlmConnectionConfig(
+            provider = LlmProviderPreset.OpenAI,
+            protocol = LlmProtocol.OpenAiCompatible,
+            baseUrl = "http://api.openai.com/v1",
+            modelId = "gpt-4o-mini",
+            allowInsecureHttp = true,
+        )
+        val result = provider.testConnection(config, "key")
+
+        assertTrue(result is LlmConnectionResult.Failure)
+        assertEquals("HTTP не разрешён для этого провайдера.", (result as LlmConnectionResult.Failure).message)
+        assertEquals(0, server.requestCount)
     }
 
     private fun custom(protocol: LlmProtocol) = AppSettings(
@@ -211,8 +295,13 @@ private class FakeSettingsRepository(initial: AppSettings) : SettingsRepository 
 private class FakeApiKeyStore : ApiKeyStore {
     var storedKey: String? = null
     var writeCount = 0
+    var failRead = false
 
-    override suspend fun read(provider: LlmProviderPreset): String? = storedKey
+    override suspend fun read(provider: LlmProviderPreset): String? {
+        if (failRead) throw ApiKeyStorageException("Не удалось прочитать сохранённый API key. Замените или удалите его.")
+        return storedKey
+    }
+
     override suspend fun write(provider: LlmProviderPreset, value: String) {
         writeCount++
         storedKey = value

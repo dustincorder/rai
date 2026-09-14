@@ -1,5 +1,6 @@
 package com.dustincorder.rai.data.llm
 
+import com.dustincorder.rai.data.secrets.ApiKeyStorageException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -54,6 +55,24 @@ class LlmErrorClassifierTest {
         assertEquals(
             "Некорректный запрос к провайдеру: Модель openai/gpt-oss-20b недоступна для этого проекта.",
             LlmErrorClassifier.userMessage(LlmHttpException(400, "Модель openai/gpt-oss-20b недоступна для этого проекта.")),
+        )
+    }
+
+    @Test fun `safe exception passes its message through`() {
+        assertEquals("API key не сохранён.", LlmErrorClassifier.userMessage(LlmSafeException("API key не сохранён.")))
+    }
+
+    @Test fun `transport exception passes clear message through`() {
+        assertEquals(
+            "HTTP для Custom provider отключён. Разрешите его в настройках.",
+            LlmErrorClassifier.userMessage(LlmTransportException("HTTP для Custom provider отключён. Разрешите его в настройках.")),
+        )
+    }
+
+    @Test fun `storage read failure maps to replace message`() {
+        assertEquals(
+            "Не удалось прочитать сохранённый API key. Замените или удалите его.",
+            LlmErrorClassifier.userMessage(ApiKeyStorageException("Не удалось прочитать сохранённый API key.")),
         )
     }
 

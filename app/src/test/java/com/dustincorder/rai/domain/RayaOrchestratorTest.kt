@@ -118,6 +118,24 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `ellipsis separated names still bypass the LLM`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceFlow()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая… Райя", "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("Я здесь."), orchestrator.state.value)
+        assertEquals(0, reply.callCount)
+        synthesis.complete()
+        runCurrent()
+    }
+
+    @Test
     fun `repeated real stt names before a request still reach the LLM`() = runTest {
         val recognition = FakeRecognitionProvider()
         val synthesis = FakeSynthesisProvider()

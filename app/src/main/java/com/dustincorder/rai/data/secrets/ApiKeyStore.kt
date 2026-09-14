@@ -5,11 +5,15 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.dustincorder.rai.data.settings.LlmProviderPreset
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+class ApiKeyStorageException(message: String) : Exception(message)
 
 interface ApiKeyStore {
     suspend fun read(provider: LlmProviderPreset): String?
@@ -22,34 +26,60 @@ class AndroidApiKeyStore(context: Context) : ApiKeyStore {
     private val preferences = context.applicationContext.getSharedPreferences("raya_encrypted_keys", Context.MODE_PRIVATE)
     private val keyLock = Any()
 
-    override suspend fun read(provider: LlmProviderPreset): String? {
-        val encoded = preferences.getString(provider.name, null) ?: return null
-        return runCatching {
-            val payload = Base64.decode(encoded, Base64.NO_WRAP)
-            val iv = payload.copyOfRange(0, IV_SIZE)
-            val ciphertext = payload.copyOfRange(IV_SIZE, payload.size)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-            cipher.doFinal(ciphertext).decodeToString()
-        }.getOrElse {
-            preferences.edit().remove(provider.name).apply()
-            null
+    override suspend fun read(provider: LlmProviderPreset): String? = withContext(Dispatchers.IO) {
+        val encoded = preferences.getString(provider.name, null) ?: return@withContext null
+        try {
+            decrypt(encoded)
+        } catch (failure: Throwable) {
+            throw ApiKeyStorageException("Не удалось прочитать сохранённый API key. Замените или удалите его.")
         }
     }
 
-    override suspend fun write(provider: LlmProviderPreset, value: String) {
+    override suspend fun write(provider: LlmProviderPreset, value: String) = withContext(Dispatchers.IO) {
         if (value.isBlank()) {
-            delete(provider)
-            return
+            remove(provider.name)
+            return@withContext
         }
+        val payload = encrypt(value)
+        val committed = preferences.edit()
+            .putString(provider.name, Base64.encodeToString(payload, Base64.NO_WRAP))
+            .commit()
+        if (!committed) {
+            throw ApiKeyStorageException("Не удалось сохранить API key.")
+        }
+        val written = preferences.getString(provider.name, null)
+        if (written == null || decryptVerified(written, value).not()) {
+            throw ApiKeyStorageException("Не удалось сохранить API key.")
+        }
+    }
+
+    override suspend fun delete(provider: LlmProviderPreset) = withContext(Dispatchers.IO) {
+        remove(provider.name)
+    }
+
+    private fun decryptVerified(encoded: String, expected: String): Boolean = try {
+        decrypt(encoded) == expected
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun remove(name: String) {
+        preferences.edit().remove(name).commit()
+    }
+
+    private fun encrypt(value: String): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        val payload = cipher.iv + cipher.doFinal(value.encodeToByteArray())
-        preferences.edit().putString(provider.name, Base64.encodeToString(payload, Base64.NO_WRAP)).apply()
+        return cipher.iv + cipher.doFinal(value.encodeToByteArray())
     }
 
-    override suspend fun delete(provider: LlmProviderPreset) {
-        preferences.edit().remove(provider.name).apply()
+    private fun decrypt(encoded: String): String {
+        val payload = Base64.decode(encoded, Base64.NO_WRAP)
+        val iv = payload.copyOfRange(0, IV_SIZE)
+        val ciphertext = payload.copyOfRange(IV_SIZE, payload.size)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+        return cipher.doFinal(ciphertext).decodeToString()
     }
 
     private fun key(): SecretKey = synchronized(keyLock) {

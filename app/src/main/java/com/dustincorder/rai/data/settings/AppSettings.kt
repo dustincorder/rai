@@ -24,6 +24,7 @@ data class AppSettings(
     val customBaseUrl: String = "",
     val modelId: String = LlmProviderPreset.OpenAI.defaultModel,
     val conversationLanguage: ConversationLanguage = ConversationLanguage.Auto,
+    val customAllowInsecureHttp: Boolean = false,
 ) {
     val protocol: LlmProtocol get() = if (provider == LlmProviderPreset.Custom) customProtocol else provider.protocol
     val baseUrl: String get() = if (provider == LlmProviderPreset.Custom) customBaseUrl else provider.baseUrl
@@ -32,7 +33,7 @@ data class AppSettings(
 fun normalizeBaseUrl(value: String): String {
     val normalized = value.trim().trimEnd('/')
     val url = normalized.toHttpUrl()
-    require(url.isHttps) { "Base URL должен использовать HTTPS." }
+    require(url.scheme == "http" || url.scheme == "https") { "Base URL должен использовать HTTP или HTTPS." }
     require(url.username.isEmpty() && url.password.isEmpty()) { "Base URL не должен содержать credentials." }
     require(url.query == null && url.fragment == null) { "Base URL не должен содержать query или fragment." }
     return url.toString().trimEnd('/')

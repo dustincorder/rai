@@ -22,6 +22,18 @@ class RayaAddressingParserTest {
     @Test fun `repeated names before request keep the question`() = assertParsed("Рая, Райя, расскажи", true, "расскажи")
     @Test fun `repeated names without punctuation keep the question`() = assertParsed("рая рая расскажи про Марс", true, "расскажи про Марс")
 
+    @Test fun `ellipsis after name is stripped`() = assertParsed("Рая…", true, "")
+    @Test fun `ellipsis between names leaves empty query`() = assertParsed("Рая… Райя", true, "")
+    @Test fun `guillemets around name are stripped`() = assertParsed("«Рая»", true, "")
+    @Test fun `quotes around name are stripped`() = assertParsed("\"Рая\"", true, "")
+    @Test fun `dash before name is stripped`() = assertParsed("-Рая", true, "")
+    @Test fun `question mark after name leaves empty query`() = assertParsed("Рая?", true, "")
+    @Test fun `exclamation mark after name leaves empty query`() = assertParsed("Рая!", true, "")
+    @Test fun `narrow no-break space is stripped`() = assertParsed("Рая\u202Fрасскажи", true, "расскажи")
+    @Test fun `no-break space around name is tolerated`() = assertParsed("\u00A0Рая, привет", true, "привет")
+    @Test fun `zero width space at boundary is tolerated`() = assertParsed("Рая\u200B", true, "")
+    @Test fun `zero width joiner split keeps the question`() = assertParsed("Рая\u200Dрасскажи", true, "расскажи")
+
     @Test
     fun `name inside another word is not addressing`() {
         val result = RayaAddressingParser.parse("крайяновский текст")
@@ -34,6 +46,20 @@ class RayaAddressingParserTest {
         val result = RayaAddressingParser.parse("раяльность")
         assertFalse(result.addressed)
         assertEquals("раяльность", result.query)
+    }
+
+    @Test
+    fun `rupture a in adjective is not addressing`() {
+        val result = RayaAddressingParser.parse("райянский")
+        assertFalse(result.addressed)
+        assertEquals("райянский", result.query)
+    }
+
+    @Test
+    fun `english name as part of longer word is not addressing`() {
+        val result = RayaAddressingParser.parse("rayabanana")
+        assertFalse(result.addressed)
+        assertEquals("rayabanana", result.query)
     }
 
     @Test

@@ -35,15 +35,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.domain.ConversationLanguage
+import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
 
@@ -55,6 +58,7 @@ fun SettingsScreen(
 ) {
     val stored by viewModel.settings.collectAsStateWithLifecycle()
     val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
+    val apiKeyStatus by viewModel.apiKeyStatus.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf(stored) }
     var apiKey by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
@@ -92,6 +96,7 @@ fun SettingsScreen(
                     ChipGrid(LlmProviderPreset.entries, draft.provider, { it.name }) { provider ->
                         draft = draft.copy(provider = provider, modelId = provider.defaultModel)
                         apiKey = ""
+                        viewModel.refreshApiKeyStatus(provider)
                     }
                     if (draft.provider == LlmProviderPreset.Custom) {
                         Text("Protocol", style = MaterialTheme.typography.labelMedium)
@@ -105,9 +110,24 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = draft.customBaseUrl,
                             onValueChange = { draft = draft.copy(customBaseUrl = it) },
-                            label = { Text("Base URL (HTTPS)") },
+                            label = { Text("Base URL") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.Switch(
+                                checked = draft.customAllowInsecureHttp,
+                                onCheckedChange = { draft = draft.copy(customAllowInsecureHttp = it) },
+                            )
+                            Text(
+                                "Разрешить небезопасный HTTP",
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                        Text(
+                            "HTTP не шифрует запросы и API key. Используйте только для доверенного локального сервера.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     OutlinedTextField(
@@ -117,11 +137,15 @@ fun SettingsScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    val keyPlaceholder = when (apiKeyStatus) {
+                        ApiKeyStatus.Configured -> "Введите новый ключ, чтобы заменить"
+                        else -> "Введите API key"
+                    }
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         label = { Text("API key") },
-                        placeholder = { Text("Оставьте пустым, чтобы сохранить текущий") },
+                        placeholder = { Text(keyPlaceholder) },
                         singleLine = true,
                         visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
@@ -143,6 +167,24 @@ fun SettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    when (apiKeyStatus) {
+                        ApiKeyStatus.Configured -> Text(
+                            "API key сохранён",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        ApiKeyStatus.Missing -> Text(
+                            "API key не сохранён",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        ApiKeyStatus.Unreadable -> Text(
+                            "Не удалось прочитать сохранённый API key. Замените или удалите его.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        ApiKeyStatus.Unknown -> Unit
+                    }
                 }
             }
 
@@ -173,6 +215,13 @@ fun SettingsScreen(
                     onClick = { viewModel.testConnection(draft, apiKey) },
                     modifier = Modifier.weight(1f),
                 ) { Text("Проверить") }
+            }
+            if (BuildConfig.DEBUG) {
+                Text(
+                    "Debug build ${BuildConfig.GIT_SHA}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Spacer(Modifier.height(12.dp))
         }

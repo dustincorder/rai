@@ -1,5 +1,7 @@
 package com.dustincorder.rai.domain
 
+import android.util.Log
+import com.dustincorder.rai.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -70,7 +72,10 @@ class RayaOrchestrator(
                 _state.value = RayaState.Thinking
                 val addressing = RayaAddressingParser.parse(recognizedText)
                 val resolvedLanguageTag = language.resolveLanguageTag(result.detectedLanguageTag, systemTag)
-                val response = if (addressing.addressed && addressing.query.isBlank()) {
+                val queryBlank = addressing.query.isBlank()
+                val localResponse = addressing.addressed && queryBlank
+                logRouting(addressing.addressed, queryBlank, localResponse)
+                val response = if (localResponse) {
                     localNameResponse(resolvedLanguageTag)
                 } else {
                     replyProvider.reply(addressing.query.ifBlank { recognizedText }, resolvedLanguageTag)
@@ -126,4 +131,11 @@ class RayaOrchestrator(
     }
 
     class RecognitionException(message: String) : RuntimeException(message)
+
+    private fun logRouting(addressed: Boolean, queryBlank: Boolean, localResponse: Boolean) {
+        if (!BuildConfig.DEBUG) return
+        runCatching {
+            Log.d("Raya-Routing", "addressed=$addressed queryBlank=$queryBlank localResponse=$localResponse")
+        }
+    }
 }

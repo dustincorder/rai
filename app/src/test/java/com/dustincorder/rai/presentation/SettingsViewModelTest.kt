@@ -3,6 +3,7 @@ package com.dustincorder.rai.presentation
 import com.dustincorder.rai.data.llm.ConfigurableReplyProvider
 import com.dustincorder.rai.data.llm.OpenAiCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.AnthropicCompatibleReplyProvider
+import com.dustincorder.rai.data.secrets.ApiKeyStorageException
 import com.dustincorder.rai.data.secrets.ApiKeyStore
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
@@ -105,6 +106,59 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `restart-like recreation shows saved key indicator`() = runBlocking {
+        keyStore.storedKey = "saved"
+        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+
+        assertEquals(ApiKeyStatus.Configured, awaitKeyStatus(recreated, ApiKeyStatus.Configured))
+    }
+
+    @Test
+    fun `missing key shows not saved indicator`() = runBlocking {
+        keyStore.storedKey = null
+        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+
+        assertEquals(ApiKeyStatus.Missing, awaitKeyStatus(recreated, ApiKeyStatus.Missing))
+    }
+
+    @Test
+    fun `blank text field does not delete stored key`() = runBlocking {
+        keyStore.storedKey = "saved"
+        viewModel.save(draftSettings(), "")
+
+        awaitKeyStatus(viewModel, ApiKeyStatus.Configured)
+        assertEquals("saved", keyStore.storedKey)
+    }
+
+    @Test
+    fun `save with new key updates indicator`() = runBlocking {
+        viewModel.save(draftSettings(), "new-key")
+
+        awaitKeyStatus(viewModel, ApiKeyStatus.Configured)
+        assertEquals("new-key", keyStore.storedKey)
+    }
+
+    @Test
+    fun `explicit delete clears key and indicator`() = runBlocking {
+        keyStore.storedKey = "saved"
+        viewModel.deleteKey(LlmProviderPreset.Custom)
+
+        withTimeout(11_000) { while (keyStore.storedKey != null) delay(20) }
+        assertEquals(null, keyStore.storedKey)
+        awaitKeyStatus(viewModel, ApiKeyStatus.Missing)
+        assertEquals(ApiKeyStatus.Missing, viewModel.apiKeyStatus.value)
+    }
+
+    @Test
+    fun `unreadable stored key surfaces unreadable indicator`() = runBlocking {
+        keyStore.storedKey = "saved"
+        keyStore.failRead = true
+        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+
+        assertEquals(ApiKeyStatus.Unreadable, awaitKeyStatus(recreated, ApiKeyStatus.Unreadable))
+    }
+
+    @Test
     fun `save persists both settings and api key`() = runBlocking {
         viewModel.save(draftSettings(), "saved-key")
         val status = awaitTerminalStatus()
@@ -128,6 +182,33 @@ class SettingsViewModelTest {
             }
         }
         return checkNotNull(message)
+    }
+
+    private suspend fun awaitKeyStatus(vm: SettingsViewModel = viewModel, expected: ApiKeyStatus): ApiKeyStatus {
+        withTimeout(11_000) {
+            while (vm.apiKeyStatus.value != expected) {
+                delay(20)
+            }
+        }
+        return vm.apiKeyStatus.value
+    }
+
+    private fun viewModelReplyProvider(): ConfigurableReplyProvider {
+        val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
+        val serverCertificates = HandshakeCertificates.Builder().heldCertificate(certificate).build()
+        val clientCertificates = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
+        val client = OkHttpClient.Builder()
+            .sslSocketFactory(clientCertificates.sslSocketFactory(), clientCertificates.trustManager)
+            .hostnameVerifier { _, _ -> true }
+            .build()
+        val json = Json { ignoreUnknownKeys = true }
+        return ConfigurableReplyProvider(
+            repository,
+            keyStore,
+            OpenAiCompatibleReplyProvider(client, json),
+            AnthropicCompatibleReplyProvider(client, json),
+            { "System" },
+        )
     }
 
     private fun draftSettings() = AppSettings(
@@ -154,12 +235,21 @@ private class TrackingSettingsRepository(initial: AppSettings) : SettingsReposit
 private class TrackingApiKeyStore : ApiKeyStore {
     var writeCount = 0
     var writtenKey: String? = null
+    var storedKey: String? = null
+    var failRead = false
 
-    override suspend fun read(provider: LlmProviderPreset): String? = null
+    override suspend fun read(provider: LlmProviderPreset): String? {
+        if (failRead) throw ApiKeyStorageException("Не удалось прочитать сохранённый API key. Замените или удалите его.")
+        return storedKey
+    }
+
     override suspend fun write(provider: LlmProviderPreset, value: String) {
         writeCount++
         writtenKey = value
+        storedKey = value
     }
 
-    override suspend fun delete(provider: LlmProviderPreset) = Unit
+    override suspend fun delete(provider: LlmProviderPreset) {
+        storedKey = null
+    }
 }

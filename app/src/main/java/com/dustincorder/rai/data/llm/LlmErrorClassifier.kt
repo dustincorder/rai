@@ -1,5 +1,6 @@
 package com.dustincorder.rai.data.llm
 
+import com.dustincorder.rai.data.secrets.ApiKeyStorageException
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -11,6 +12,9 @@ import javax.net.ssl.SSLPeerUnverifiedException
 object LlmErrorClassifier {
     fun userMessage(error: Throwable): String = when (error) {
         is LlmConfigurationException -> error.message ?: "Проверьте настройки LLM-провайдера."
+        is LlmSafeException -> error.message ?: "Не удалось обратиться к провайдеру."
+        is LlmTransportException -> error.message ?: "Проверьте настройки провайдера."
+        is ApiKeyStorageException -> "Не удалось прочитать сохранённый API key. Замените или удалите его."
         is LlmHttpException -> httpMessage(error)
         is UnknownHostException -> "Не удалось найти сервер провайдера."
         is ConnectException -> "Не удалось подключиться к провайдеру."

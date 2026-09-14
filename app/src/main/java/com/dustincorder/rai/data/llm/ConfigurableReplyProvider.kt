@@ -21,17 +21,20 @@ class ConfigurableReplyProvider(
 ) : ReplyProvider {
     override suspend fun reply(input: String, languageTag: String?): String {
         val settings = settingsRepository.settings.first()
-        val apiKey = apiKeyStore.read(settings.provider)
-        if (settings.modelId.isBlank() || settings.baseUrl.isBlank() ||
-            (settings.provider.requiresApiKey && apiKey.isNullOrBlank())
-        ) {
-            throw LlmConfigurationException("Настрой LLM-провайдера.")
-        }
-        val prompt = buildString {
-            append(systemPrompt())
-            if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
-        }
+        val config = settings.connectionConfig()
         return try {
+            requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
+            val apiKey = apiKeyStore.read(settings.provider)
+            if (settings.modelId.isBlank() || settings.baseUrl.isBlank()) {
+                throw LlmConfigurationException("Настрой LLM-провайдера.")
+            }
+            if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
+                throw LlmSafeException("API key не сохранён.")
+            }
+            val prompt = buildString {
+                append(systemPrompt())
+                if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
+            }
             when (settings.protocol) {
                 LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
                 LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, input)
@@ -39,21 +42,22 @@ class ConfigurableReplyProvider(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
-            logDiagnostics(failure, settings.connectionConfig())
+            logDiagnostics(failure, config)
             throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
         }
     }
 
     suspend fun testConnection(config: LlmConnectionConfig, apiKey: String?): LlmConnectionResult {
-        val effectiveKey = resolveEffectiveKey(config, apiKey)
-        if (config.baseUrl.isBlank() || config.modelId.isBlank()) {
-            return LlmConnectionResult.Failure("Укажите URL и модель провайдера.")
-        }
-        if (config.provider.requiresApiKey && effectiveKey.isNullOrBlank()) {
-            return LlmConnectionResult.Failure("Укажите API key провайдера.")
-        }
-        val probePrompt = "Тебе нужна проверка соединения. Ответь строго одним словом: OK."
         return try {
+            requireTransportAllowed(config.provider, config.baseUrl, config.allowInsecureHttp)
+            val effectiveKey = resolveEffectiveKey(config, apiKey)
+            if (config.baseUrl.isBlank() || config.modelId.isBlank()) {
+                return LlmConnectionResult.Failure("Укажите URL и модель провайдера.")
+            }
+            if (config.provider.requiresApiKey && effectiveKey.isNullOrBlank()) {
+                return LlmConnectionResult.Failure("API key не сохранён.")
+            }
+            val probePrompt = "Тебе нужна проверка соединения. Ответь строго одним словом: OK."
             when (config.protocol) {
                 LlmProtocol.OpenAiCompatible -> openAi.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, "ping")
                 LlmProtocol.AnthropicCompatible -> anthropic.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, "ping")

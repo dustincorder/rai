@@ -32,9 +32,9 @@ class AppSettingsTest {
     }
 
     @Test
-    fun `URL normalization removes trailing slash and rejects HTTP`() {
+    fun `URL normalization removes trailing slash and allows http`() {
         assertEquals("https://example.com/v1", normalizeBaseUrl(" https://example.com/v1/ "))
-        assertTrue(runCatching { normalizeBaseUrl("http://example.com/v1") }.exceptionOrNull() is IllegalArgumentException)
+        assertEquals("http://example.com/v1", normalizeBaseUrl("http://example.com/v1"))
         assertTrue(runCatching { normalizeBaseUrl("https://example.com/v1?token=value") }.isFailure)
     }
 
