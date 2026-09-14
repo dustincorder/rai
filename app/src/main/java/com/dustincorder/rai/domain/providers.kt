@@ -12,7 +12,7 @@ sealed interface SpeechRecognitionEvent {
 interface SpeechRecognitionProvider {
     val events: Flow<SpeechRecognitionEvent>
 
-    fun startListening(request: RecognitionRequest)
+    suspend fun startListening(request: RecognitionRequest)
     fun cancel()
     fun release()
 }

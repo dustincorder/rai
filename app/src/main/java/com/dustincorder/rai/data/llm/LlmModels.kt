@@ -2,6 +2,7 @@ package com.dustincorder.rai.data.llm
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.io.IOException
 
 @Serializable data class OpenAiMessage(val role: String, val content: String)
 @Serializable data class OpenAiRequest(val model: String, val messages: List<OpenAiMessage>)
@@ -18,5 +19,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class AnthropicResponse(val content: List<AnthropicContent> = emptyList())
 @Serializable data class AnthropicContent(val type: String, val text: String? = null)
 
+@Serializable data class ProviderErrorEnvelope(val error: ProviderErrorDetail? = null)
+@Serializable data class ProviderErrorDetail(val message: String? = null, val type: String? = null)
+
 class LlmConfigurationException(message: String) : IllegalStateException(message)
-class LlmHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
+class LlmHttpException(val statusCode: Int, val providerMessage: String? = null) : IOException("HTTP $statusCode")

@@ -30,4 +30,18 @@ class ConversationLanguageTest {
         assertEquals(null, detected.languageTag)
         assertEquals(true, detected.enableDetection)
     }
+
+    @Test
+    fun `local name response uses primary language subtag`() {
+        assertEquals("Я здесь.", localNameResponse("ru-RU"))
+        assertEquals("Я тут.", localNameResponse("uk-UA"))
+        assertEquals("I'm here.", localNameResponse("en-US"))
+        assertEquals("I'm here.", localNameResponse("en-GB"))
+    }
+
+    @Test
+    fun `local name response falls back for unknown language`() {
+        assertEquals("Я здесь.", localNameResponse("de-DE"))
+        assertEquals("Я здесь.", localNameResponse(null))
+    }
 }

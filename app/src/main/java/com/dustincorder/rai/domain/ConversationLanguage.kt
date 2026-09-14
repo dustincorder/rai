@@ -40,3 +40,13 @@ fun String.isValidLanguageTag(): Boolean {
     val locale = java.util.Locale.forLanguageTag(this)
     return locale.language.isNotBlank() && locale.toLanguageTag() != "und"
 }
+
+fun localNameResponse(resolvedLanguageTag: String?): String = when (resolvedLanguageTag?.primarySubtag()) {
+    "ru" -> "Я здесь."
+    "uk" -> "Я тут."
+    "en" -> "I'm here."
+    else -> "Я здесь."
+}
+
+private fun String.primarySubtag(): String? =
+    substringBefore('-').takeIf { it.isNotBlank() }?.lowercase()

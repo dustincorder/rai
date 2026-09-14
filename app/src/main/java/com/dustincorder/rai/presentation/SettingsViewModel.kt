@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.RayaApplication
 import com.dustincorder.rai.data.llm.ConfigurableReplyProvider
+import com.dustincorder.rai.data.llm.LlmConnectionResult
+import com.dustincorder.rai.data.llm.connectionConfig
 import com.dustincorder.rai.data.secrets.ApiKeyStore
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProviderPreset
@@ -16,6 +18,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+sealed interface ConnectionStatus {
+    data object None : ConnectionStatus
+    data object Checking : ConnectionStatus
+    data class Message(val message: String, val isError: Boolean) : ConnectionStatus
+}
+
 class SettingsViewModel(
     private val repository: SettingsRepository,
     private val apiKeyStore: ApiKeyStore,
@@ -26,7 +34,7 @@ class SettingsViewModel(
         SharingStarted.WhileSubscribed(5_000),
         AppSettings(),
     )
-    val connectionStatus = MutableStateFlow<String?>(null)
+    val connectionStatus = MutableStateFlow<ConnectionStatus>(ConnectionStatus.None)
 
     fun save(settings: AppSettings, apiKey: String) {
         viewModelScope.launch {
@@ -36,9 +44,9 @@ class SettingsViewModel(
                 repository.save(validated)
                 if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
             }.onSuccess {
-                connectionStatus.value = "Настройки сохранены"
+                connectionStatus.value = ConnectionStatus.Message("Настройки сохранены", isError = false)
             }.onFailure {
-                connectionStatus.value = it.message ?: "Не удалось сохранить настройки"
+                connectionStatus.value = ConnectionStatus.Message(it.message ?: "Не удалось сохранить настройки", isError = true)
             }
         }
     }
@@ -46,23 +54,21 @@ class SettingsViewModel(
     fun deleteKey(provider: LlmProviderPreset) {
         viewModelScope.launch {
             apiKeyStore.delete(provider)
-            connectionStatus.value = "API key удалён"
+            connectionStatus.value = ConnectionStatus.Message("API key удалён", isError = false)
         }
     }
 
     fun testConnection(settings: AppSettings, apiKey: String) {
         viewModelScope.launch {
-            connectionStatus.value = "Проверка подключения..."
-            runCatching {
-                val validated = settings.validated()
-                clearStaleCustomKey(validated, apiKey)
-                repository.save(validated)
-                if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
-                replyProvider.testConnection()
-            }.onSuccess {
-                connectionStatus.value = "Подключение работает"
+            connectionStatus.value = ConnectionStatus.Checking
+            val config = runCatching { settings.validated().connectionConfig() }
+            config.onSuccess { cfg ->
+                when (val result = replyProvider.testConnection(cfg, apiKey)) {
+                    LlmConnectionResult.Success -> connectionStatus.value = ConnectionStatus.Message("Подключение работает", isError = false)
+                    is LlmConnectionResult.Failure -> connectionStatus.value = ConnectionStatus.Message(result.message, isError = true)
+                }
             }.onFailure {
-                connectionStatus.value = it.message ?: "Не удалось проверить подключение"
+                connectionStatus.value = ConnectionStatus.Message("Проверьте настройки провайдера.", isError = true)
             }
         }
     }

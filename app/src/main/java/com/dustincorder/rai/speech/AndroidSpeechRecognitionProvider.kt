@@ -5,22 +5,30 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import com.dustincorder.rai.domain.RecognitionRequest
 import com.dustincorder.rai.domain.SpeechRecognitionEvent
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
-import com.dustincorder.rai.domain.ConversationLanguage
-import com.dustincorder.rai.domain.RecognitionRequest
 import com.dustincorder.rai.domain.toLanguagePlan
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import java.util.Locale
+import java.util.concurrent.Executors
+import kotlin.coroutines.resume
 
 class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProvider {
     private val _events = MutableSharedFlow<SpeechRecognitionEvent>(extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
     private var detectedLanguageTag: String? = null
+    private var detectionSupported: Boolean? = null
+
+    private val supportExecutor = Executors.newSingleThreadExecutor()
 
     private val recognizer = SpeechRecognizer.createSpeechRecognizer(context.applicationContext).apply {
         setRecognitionListener(object : RecognitionListener {
@@ -52,26 +60,17 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
         })
     }
 
-    override fun startListening(request: RecognitionRequest) {
+    override suspend fun startListening(request: RecognitionRequest) {
         detectedLanguageTag = null
-        val supportsDetection = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        val supportsDetection = detectionSupport()
         val languagePlan = request.toLanguagePlan(supportsDetection)
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            languagePlan.languageTag?.let {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, it)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, it)
-            }
-            if (languagePlan.enableDetection) {
-                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
-                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, true)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
-            }
+        val intent = recognitionIntent(languagePlan.languageTag, languagePlan.enableDetection)
+        try {
+            recognizer.startListening(intent)
+        } catch (unexpected: RuntimeException) {
+            val fallbackPlan = request.toLanguagePlan(false)
+            recognizer.startListening(recognitionIntent(fallbackPlan.languageTag, enableDetection = false))
         }
-        recognizer.startListening(intent)
     }
 
     override fun cancel() {
@@ -80,6 +79,54 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
 
     override fun release() {
         recognizer.destroy()
+        supportExecutor.shutdown()
+    }
+
+    private fun recognitionIntent(languageTag: String?, enableDetection: Boolean): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            languageTag?.let {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, it)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, it)
+            }
+            if (enableDetection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
+            }
+        }
+
+    private suspend fun detectionSupport(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
+        detectionSupported?.let { return it }
+        val supported = runCatching {
+            withTimeout(DETECTION_PROBE_TIMEOUT_MS) {
+                suspendCancellableCoroutine { continuation ->
+                    try {
+                        recognizer.checkRecognitionSupport(
+                            recognitionIntent(languageTag = null, enableDetection = true),
+                            supportExecutor,
+                            object : RecognitionSupportCallback {
+                                override fun onSupportResult(support: RecognitionSupport) {
+                                    if (continuation.isActive) continuation.resume(true)
+                                }
+
+                                override fun onError(error: Int) {
+                                    if (continuation.isActive) continuation.resume(false)
+                                }
+                            },
+                        )
+                    } catch (unexpected: Throwable) {
+                        if (continuation.isActive) continuation.resume(false)
+                    }
+                }
+            }
+        }.getOrDefault(false)
+        detectionSupported = supported
+        return supported
     }
 
     private fun Bundle.firstText(): String? =
@@ -92,5 +139,9 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
         SpeechRecognizer.ERROR_NETWORK,
         SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Сервис распознавания недоступен."
         else -> "Ошибка распознавания речи ($error)."
+    }
+
+    private companion object {
+        const val DETECTION_PROBE_TIMEOUT_MS = 1_500L
     }
 }

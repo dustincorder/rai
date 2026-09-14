@@ -8,6 +8,7 @@ import com.dustincorder.rai.data.settings.SettingsRepository
 import com.dustincorder.rai.domain.ConversationLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -24,6 +25,7 @@ import org.junit.Test
 class ConfigurableReplyProviderTest {
     private lateinit var server: MockWebServer
     private lateinit var repository: FakeSettingsRepository
+    private lateinit var keyStore: FakeApiKeyStore
     private lateinit var provider: ConfigurableReplyProvider
 
     @Before
@@ -41,9 +43,10 @@ class ConfigurableReplyProviderTest {
             .build()
         val json = Json { ignoreUnknownKeys = true }
         repository = FakeSettingsRepository(AppSettings())
+        keyStore = FakeApiKeyStore()
         provider = ConfigurableReplyProvider(
             repository,
-            FakeApiKeyStore(),
+            keyStore,
             OpenAiCompatibleReplyProvider(client, json),
             AnthropicCompatibleReplyProvider(client, json),
             { "System" },
@@ -72,6 +75,68 @@ class ConfigurableReplyProviderTest {
         assertEquals("/v1/messages", server.takeRequest().path)
     }
 
+    @Test
+    fun `successful connection test does not persist draft settings`() = runTest {
+        val initial = repository.settings.first()
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        val result = provider.testConnection(custom(LlmProtocol.OpenAiCompatible).connectionConfig(), "key")
+
+        assertEquals(LlmConnectionResult.Success, result)
+        assertEquals(initial, repository.settings.first())
+        assertEquals(0, repository.saveCount)
+    }
+
+    @Test
+    fun `failed connection test does not persist draft settings`() = runTest {
+        val initial = repository.settings.first()
+        server.enqueue(MockResponse().setResponseCode(500))
+        val result = provider.testConnection(custom(LlmProtocol.OpenAiCompatible).connectionConfig(), "key")
+
+        assertTrue(result is LlmConnectionResult.Failure)
+        assertEquals(initial, repository.settings.first())
+        assertEquals(0, repository.saveCount)
+    }
+
+    @Test
+    fun `connection test never writes api keys`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        provider.testConnection(custom(LlmProtocol.OpenAiCompatible).connectionConfig(), "draft-key")
+        assertEquals(0, keyStore.writeCount)
+    }
+
+    @Test
+    fun `connection test reuses stored key when draft key is blank`() = runTest {
+        keyStore.storedKey = "stored-key"
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        val result = provider.testConnection(custom(LlmProtocol.OpenAiCompatible).connectionConfig(), "")
+
+        assertEquals(LlmConnectionResult.Success, result)
+        assertEquals("Bearer stored-key", server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `connection test requires api key for keyed providers`() = runTest {
+        val keyedConfig = AppSettings(
+            provider = LlmProviderPreset.Groq,
+            modelId = "openai/gpt-oss-20b",
+        )
+        val result = provider.testConnection(keyedConfig.connectionConfig(), "")
+
+        assertEquals(LlmConnectionResult.Failure("Укажите API key провайдера."), result)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `connection refused maps to safe user message`() = runTest {
+        val config = custom(LlmProtocol.OpenAiCompatible).copy(
+            customBaseUrl = "https://127.0.0.1:1",
+        )
+        val result = provider.testConnection(config.connectionConfig(), "key")
+
+        assertTrue(result is LlmConnectionResult.Failure)
+        assertEquals("Не удалось подключиться к провайдеру.", (result as LlmConnectionResult.Failure).message)
+    }
+
     private fun custom(protocol: LlmProtocol) = AppSettings(
         provider = LlmProviderPreset.Custom,
         customProtocol = protocol,
@@ -83,12 +148,27 @@ class ConfigurableReplyProviderTest {
 private class FakeSettingsRepository(initial: AppSettings) : SettingsRepository {
     private val state = MutableStateFlow(initial)
     override val settings: Flow<AppSettings> = state
-    override suspend fun save(settings: AppSettings) { state.value = settings }
+    var saveCount = 0
+
+    override suspend fun save(settings: AppSettings) {
+        saveCount++
+        state.value = settings
+    }
+
     override suspend fun currentLanguage(): ConversationLanguage = state.value.conversationLanguage
 }
 
 private class FakeApiKeyStore : ApiKeyStore {
-    override suspend fun read(provider: LlmProviderPreset): String? = null
-    override suspend fun write(provider: LlmProviderPreset, value: String) = Unit
-    override suspend fun delete(provider: LlmProviderPreset) = Unit
+    var storedKey: String? = null
+    var writeCount = 0
+
+    override suspend fun read(provider: LlmProviderPreset): String? = storedKey
+    override suspend fun write(provider: LlmProviderPreset, value: String) {
+        writeCount++
+        storedKey = value
+    }
+
+    override suspend fun delete(provider: LlmProviderPreset) {
+        storedKey = null
+    }
 }

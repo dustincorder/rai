@@ -44,6 +44,7 @@ import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.domain.ConversationLanguage
+import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -154,7 +155,15 @@ fun SettingsScreen(
                 }
             }
 
-            connectionStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            val status = connectionStatus
+            when (status) {
+                is ConnectionStatus.None -> Unit
+                is ConnectionStatus.Checking -> Text("Проверка подключения…")
+                is ConnectionStatus.Message -> Text(
+                    status.message,
+                    color = if (status.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
                     onClick = { viewModel.save(draft, apiKey) },

@@ -1,6 +1,7 @@
 package com.dustincorder.rai.data.settings
 
 import com.dustincorder.rai.domain.ConversationLanguage
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 enum class LlmProtocol { OpenAiCompatible, AnthropicCompatible }
@@ -12,8 +13,8 @@ enum class LlmProviderPreset(
     val requiresApiKey: Boolean = true,
 ) {
     OpenAI(LlmProtocol.OpenAiCompatible, "https://api.openai.com/v1", "gpt-4o-mini"),
-    Groq(LlmProtocol.OpenAiCompatible, "https://api.groq.com/openai/v1", "llama-3.1-8b-instant"),
-    Anthropic(LlmProtocol.AnthropicCompatible, "https://api.anthropic.com/v1", "claude-3-5-haiku-latest"),
+    Groq(LlmProtocol.OpenAiCompatible, "https://api.groq.com/openai/v1", "openai/gpt-oss-20b"),
+    Anthropic(LlmProtocol.AnthropicCompatible, "https://api.anthropic.com/v1", "claude-sonnet-5"),
     Custom(LlmProtocol.OpenAiCompatible, "", "", false),
 }
 
@@ -35,4 +36,12 @@ fun normalizeBaseUrl(value: String): String {
     require(url.username.isEmpty() && url.password.isEmpty()) { "Base URL не должен содержать credentials." }
     require(url.query == null && url.fragment == null) { "Base URL не должен содержать query или fragment." }
     return url.toString().trimEnd('/')
+}
+
+fun resolveEndpointUrl(baseUrl: String, suffixes: List<String>): HttpUrl {
+    val url = normalizeBaseUrl(baseUrl).toHttpUrl()
+    val suffixPath = suffixes.joinToString("/")
+    val path = url.encodedPath.trimEnd('/')
+    if (path == "/$suffixPath" || path.endsWith("/$suffixPath")) return url
+    return url.newBuilder().apply { suffixes.forEach(::addPathSegment) }.build()
 }

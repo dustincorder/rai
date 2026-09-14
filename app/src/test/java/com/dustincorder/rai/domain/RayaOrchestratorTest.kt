@@ -100,6 +100,38 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `local name response uses resolved language`() = runTest {
+        val cases = listOf(
+            "ru-RU" to "Я здесь.",
+            "uk-UA" to "Я тут.",
+            "en-US" to "I'm here.",
+        )
+        cases.forEach { (tag, expected) ->
+            val recognition = FakeRecognitionProvider()
+            val synthesis = FakeSynthesisProvider()
+            val orchestrator = RayaOrchestrator(
+                this,
+                recognition,
+                synthesis,
+                FakeReplyProvider(),
+                languageProvider = object : ConversationLanguageProvider {
+                    override suspend fun currentLanguage(): ConversationLanguage = ConversationLanguage.Auto
+                },
+                systemLanguageTag = { "ru-RU" },
+            )
+
+            orchestrator.startVoiceFlow()
+            runCurrent()
+            recognition.emit(SpeechRecognitionEvent.Final("Райя", tag))
+            runCurrent()
+
+            assertEquals(RayaState.Speaking(expected), orchestrator.state.value)
+            synthesis.complete()
+            runCurrent()
+        }
+    }
+
+    @Test
     fun `detected language reaches reply and TTS`() = runTest {
         val recognition = FakeRecognitionProvider()
         val synthesis = FakeSynthesisProvider()
@@ -133,7 +165,7 @@ private class FakeRecognitionProvider : SpeechRecognitionProvider {
     override val events: SharedFlow<SpeechRecognitionEvent> = _events
     var cancelCount = 0
 
-    override fun startListening(request: RecognitionRequest) = Unit
+    override suspend fun startListening(request: RecognitionRequest) = Unit
 
     override fun cancel() {
         cancelCount++

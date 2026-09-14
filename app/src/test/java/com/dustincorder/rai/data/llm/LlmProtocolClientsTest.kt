@@ -77,14 +77,71 @@ class LlmProtocolClientsTest {
     }
 
     @Test
-    fun `non 2xx response throws sanitized HTTP error`() = runTest {
+    fun `non 2xx response is classified with safe sanitized message`() = runTest {
         server.enqueue(MockResponse().setResponseCode(401).setBody("secret provider details"))
         val failure = runCatching {
             openAi.reply(server.url("/v1").toString(), "model", "secret", "System", "Hi")
         }.exceptionOrNull()
 
         assertTrue(failure is LlmHttpException)
-        assertEquals("LLM-провайдер вернул ошибку HTTP 401.", failure?.message)
-        assertFalse(failure?.message.orEmpty().contains("secret"))
+        assertEquals(401, (failure as LlmHttpException).statusCode)
+        val message = LlmErrorClassifier.userMessage(failure)
+        assertEquals("Неверный API key или провайдер отклонил авторизацию.", message)
+        assertFalse(message.contains("secret"))
+    }
+
+    @Test
+    fun `json provider error message is extracted safely`() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(400).setBody(
+                """{"error":{"message":"Модель openai/gpt-oss-20b недоступна для этого проекта.","type":"invalid_request_error"}}""",
+            ),
+        )
+        val failure = runCatching {
+            openAi.reply(server.url("/v1").toString(), "model", "secret", "System", "Hi")
+        }.exceptionOrNull()
+        val message = LlmErrorClassifier.userMessage(failure!!)
+        assertEquals("Некорректный запрос к провайдеру.: Модель openai/gpt-oss-20b недоступна для этого проекта.", message)
+    }
+
+    @Test
+    fun `malformed error body falls back to safe message`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("<html><body>upstream exploded</body></html>"))
+        val failure = runCatching {
+            openAi.reply(server.url("/v1").toString(), "model", "secret", "System", "Hi")
+        }.exceptionOrNull()
+        val message = LlmErrorClassifier.userMessage(failure!!)
+        assertEquals("Провайдер вернул ошибку сервера (HTTP 500).", message)
+        assertFalse(message.contains("<html>"))
+    }
+
+    @Test
+    fun `OpenAI uses full chat completions endpoint unchanged`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        openAi.reply(server.url("/v1/chat/completions").toString(), "model", null, "System", "Hi")
+        assertEquals("/v1/chat/completions", server.takeRequest().path)
+    }
+
+    @Test
+    fun `Anthropic uses full messages endpoint unchanged`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"content":[{"type":"text","text":"OK"}]}"""))
+        anthropic.reply(server.url("/v1/messages").toString(), "model", null, "System", "Hi")
+        assertEquals("/v1/messages", server.takeRequest().path)
+    }
+
+    @Test
+    fun `slash model id is serialized unchanged`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        openAi.reply(server.url("/v1").toString(), "openai/gpt-oss-20b", "secret", "System", "Hi")
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"model\":\"openai/gpt-oss-20b\""))
+    }
+
+    @Test
+    fun `slash model id qwen is serialized unchanged`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}"""))
+        openAi.reply(server.url("/v1").toString(), "qwen/example-model", "secret", "System", "Hi")
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"model\":\"qwen/example-model\""))
     }
 }

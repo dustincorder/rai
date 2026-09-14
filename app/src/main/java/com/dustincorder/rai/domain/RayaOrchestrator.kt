@@ -71,7 +71,7 @@ class RayaOrchestrator(
                 val addressing = RayaAddressingParser.parse(recognizedText)
                 val resolvedLanguageTag = language.resolveLanguageTag(result.detectedLanguageTag, systemTag)
                 val response = if (addressing.addressed && addressing.query.isBlank()) {
-                    "Я здесь."
+                    localNameResponse(resolvedLanguageTag)
                 } else {
                     replyProvider.reply(addressing.query.ifBlank { recognizedText }, resolvedLanguageTag)
                 }

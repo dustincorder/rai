@@ -10,6 +10,16 @@ class AppSettingsTest {
     @Test fun `Anthropic preset maps protocol and URL`() = assertPreset(LlmProviderPreset.Anthropic, LlmProtocol.AnthropicCompatible, "https://api.anthropic.com/v1")
 
     @Test
+    fun `Groq preset default model uses creator slash id`() {
+        assertEquals("openai/gpt-oss-20b", LlmProviderPreset.Groq.defaultModel)
+    }
+
+    @Test
+    fun `Anthropic preset default model is current Sonnet`() {
+        assertEquals("claude-sonnet-5", LlmProviderPreset.Anthropic.defaultModel)
+    }
+
+    @Test
     fun `custom provider uses custom protocol and URL`() {
         val settings = AppSettings(
             provider = LlmProviderPreset.Custom,
@@ -26,6 +36,58 @@ class AppSettingsTest {
         assertEquals("https://example.com/v1", normalizeBaseUrl(" https://example.com/v1/ "))
         assertTrue(runCatching { normalizeBaseUrl("http://example.com/v1") }.exceptionOrNull() is IllegalArgumentException)
         assertTrue(runCatching { normalizeBaseUrl("https://example.com/v1?token=value") }.isFailure)
+    }
+
+    @Test
+    fun `OpenAI endpoint appends chat completions to base URL`() {
+        assertEquals(
+            "/v1/chat/completions",
+            resolveEndpointUrl("https://example.com/v1", listOf("chat", "completions")).encodedPath,
+        )
+    }
+
+    @Test
+    fun `OpenAI full endpoint URL is used unchanged`() {
+        assertEquals(
+            "/v1/chat/completions",
+            resolveEndpointUrl("https://example.com/v1/chat/completions", listOf("chat", "completions")).encodedPath,
+        )
+    }
+
+    @Test
+    fun `Anthropic endpoint appends messages to base URL`() {
+        assertEquals(
+            "/v1/messages",
+            resolveEndpointUrl("https://example.com/v1", listOf("messages")).encodedPath,
+        )
+    }
+
+    @Test
+    fun `Anthropic full endpoint URL is used unchanged`() {
+        assertEquals(
+            "/v1/messages",
+            resolveEndpointUrl("https://example.com/v1/messages", listOf("messages")).encodedPath,
+        )
+    }
+
+    @Test
+    fun `endpoint URL normalizes trailing slash without duplication`() {
+        assertEquals(
+            "/v1/chat/completions",
+            resolveEndpointUrl("https://example.com/v1/chat/completions/", listOf("chat", "completions")).encodedPath,
+        )
+        assertEquals(
+            "/v1/chat/completions",
+            resolveEndpointUrl("https://example.com/v1/", listOf("chat", "completions")).encodedPath,
+        )
+    }
+
+    @Test
+    fun `endpoint preserves custom prefix without forcing v1`() {
+        assertEquals(
+            "/api/openai/chat/completions",
+            resolveEndpointUrl("https://host/api/openai", listOf("chat", "completions")).encodedPath,
+        )
     }
 
     private fun assertPreset(preset: LlmProviderPreset, protocol: LlmProtocol, url: String) {
