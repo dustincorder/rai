@@ -2,8 +2,5 @@
 <resources>
     <style name="Theme.Raya" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#0B0B18</item>
-        <item name="android:navigationBarColor">#0B0B18</item>
     </style>
 </resources>

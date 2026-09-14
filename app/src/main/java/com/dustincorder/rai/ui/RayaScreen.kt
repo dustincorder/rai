@@ -1,5 +1,6 @@
 package com.dustincorder.rai.ui
 
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,10 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dustincorder.rai.presentation.RayaUiState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
+import com.dustincorder.rai.ui.theme.RayaTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -197,5 +200,27 @@ private fun ConversationCard(state: RayaUiState) {
                 )
             }
         }
+    }
+}
+
+@Preview(name = "Raya screen light", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_NO)
+@Composable
+private fun RayaScreenLightPreview() {
+    RayaTheme(darkTheme = false) {
+        RayaScreen(
+            state = RayaUiState(),
+            onTalkClick = {},
+        )
+    }
+}
+
+@Preview(name = "Raya screen dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun RayaScreenDarkPreview() {
+    RayaTheme(darkTheme = true) {
+        RayaScreen(
+            state = RayaUiState(),
+            onTalkClick = {},
+        )
     }
 }
