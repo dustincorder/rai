@@ -2,6 +2,7 @@ package com.dustincorder.rai.speech
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -47,6 +48,9 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale.toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale.toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
+            }
         }
         recognizer.startListening(intent)
     }
