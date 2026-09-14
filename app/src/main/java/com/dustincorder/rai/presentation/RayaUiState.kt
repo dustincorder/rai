@@ -1,15 +1,9 @@
 package com.dustincorder.rai.presentation
 
-enum class RayaEmotion {
-    Calm,
-    Listening,
-    Thinking,
-    Speaking,
-    Error,
-}
+import com.dustincorder.rai.ui.raya.face.RayaFaceState
 
 data class RayaUiState(
-    val emotion: RayaEmotion = RayaEmotion.Calm,
+    val face: RayaFaceState = RayaFaceState(),
     val status: String = "Готова к разговору",
     val userText: String = "Нажми кнопку, чтобы начать демонстрацию.",
     val responseText: String = "Я рядом и жду сигнала.",
