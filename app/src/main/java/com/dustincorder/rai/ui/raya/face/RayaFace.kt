@@ -191,6 +191,7 @@ private fun DrawScope.drawFace(
     }
     val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
     val eyeY = centerY + when (state.emotion) {
+        RayaFaceEmotion.Excited -> -height * 0.012f
         RayaFaceEmotion.SemanticThinking -> height * 0.018f
         else -> 0f
     }
@@ -267,7 +268,7 @@ private fun DrawScope.drawEye(
             color = color,
             topLeft = point(left, top),
             size = dimensions(width, height),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(height * 0.14f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(height * 0.2f),
         )
         EyeShape.Flat -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
         EyeShape.Wink -> drawRect(
