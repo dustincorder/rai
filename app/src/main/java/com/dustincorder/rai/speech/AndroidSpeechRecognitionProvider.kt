@@ -9,6 +9,8 @@ import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
+import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.domain.RecognitionRequest
 import com.dustincorder.rai.domain.SpeechRecognitionErrorReason
 import com.dustincorder.rai.domain.SpeechRecognitionEvent
@@ -33,30 +35,53 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
 
     private val recognizer = SpeechRecognizer.createSpeechRecognizer(context.applicationContext).apply {
         setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) = Unit
-            override fun onBeginningOfSpeech() = Unit
+            override fun onReadyForSpeech(params: Bundle?) {
+                debug("stt.onReadyForSpeech")
+            }
+
+            override fun onBeginningOfSpeech() {
+                debug("stt.onBeginningOfSpeech")
+            }
+
             override fun onRmsChanged(rmsdB: Float) = Unit
             override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEndOfSpeech() = Unit
+
+            override fun onEndOfSpeech() {
+                debug("stt.onEndOfSpeech")
+            }
+
             override fun onPartialResults(partialResults: Bundle?) {
-                partialResults?.firstText()?.let { _events.tryEmit(SpeechRecognitionEvent.Partial(it)) }
+                if (partialResults?.firstText() != null) {
+                    debug("stt.onPartialResults")
+                    _events.tryEmit(SpeechRecognitionEvent.Partial(partialResults.firstText()!!))
+                }
             }
 
             override fun onResults(results: Bundle?) {
-                results?.firstText()?.let { _events.tryEmit(SpeechRecognitionEvent.Final(it, detectedLanguageTag)) }
-                    ?: _events.tryEmit(
+                if (results?.firstText() != null) {
+                    debug("stt.onResults detectedLanguageTag=${detectedLanguageTag ?: "null"}")
+                    _events.tryEmit(SpeechRecognitionEvent.Final(results.firstText()!!, detectedLanguageTag))
+                } else {
+                    debug("stt.onResults EMPTY -> NoMatch")
+                    _events.tryEmit(
                         SpeechRecognitionEvent.Error(SpeechRecognitionErrorReason.NoMatch, "Речь не распознана."),
                     )
+                }
             }
 
             override fun onLanguageDetection(results: Bundle) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     detectedLanguageTag = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
+                    debug("stt.onLanguageDetection detectedLanguageTag=$detectedLanguageTag")
                 }
             }
 
             override fun onError(error: Int) {
-                _events.tryEmit(errorMessage(error))
+                val event = errorMessage(error)
+                debug(
+                    "stt.onError code=$error reason=${event.reason} message=${event.message}",
+                )
+                _events.tryEmit(event)
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -67,12 +92,18 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
         detectedLanguageTag = null
         val supportsDetection = detectionSupport()
         val languagePlan = request.toLanguagePlan(supportsDetection)
-        val intent = recognitionIntent(languagePlan.languageTag, languagePlan.enableDetection)
+        debug(
+            "stt.startListening languagePlan=${languagePlan.languageTag ?: "null"} " +
+                "enableDetection=${languagePlan.enableDetection} supportsDetection=$supportsDetection",
+        )
         try {
-            recognizer.startListening(intent)
+            recognizer.startListening(recognitionIntent(languagePlan.languageTag, languagePlan.enableDetection))
+            debug("stt.startListening.success")
         } catch (unexpected: RuntimeException) {
+            debug("stt.startListening.failure error=${unexpected.message ?: unexpected.javaClass.simpleName} -> fallbackAuto")
             val fallbackPlan = request.toLanguagePlan(false)
             recognizer.startListening(recognitionIntent(fallbackPlan.languageTag, enableDetection = false))
+            debug("stt.startListening.success (fallbackAuto language=${fallbackPlan.languageTag ?: "null"})")
         }
     }
 
@@ -161,6 +192,16 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
     }
 
     private companion object {
+        const val TAG = "Raya-STT"
         const val DETECTION_PROBE_TIMEOUT_MS = 1_500L
+    }
+
+    private inline fun debug(message: String) {
+        if (!BuildConfig.DEBUG) return
+        try {
+            Log.d(TAG, message)
+        } catch (_: RuntimeException) {
+            // android.util.Log is not mocked in JVM unit tests.
+        }
     }
 }

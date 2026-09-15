@@ -1,5 +1,7 @@
 package com.dustincorder.rai.domain
 
+import android.util.Log
+import com.dustincorder.rai.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -60,6 +62,23 @@ class RayaOrchestrator(
     private var turnEpoch = 0
     private var lastUserActivityAt = Long.MAX_VALUE
 
+    private fun logVoice(message: String) {
+        if (!BuildConfig.DEBUG) return
+        try {
+            Log.d(TAG, message)
+        } catch (_: RuntimeException) {
+            // android.util.Log is not mocked in JVM unit tests.
+        }
+    }
+
+    private fun stateName(): String = _state.value::class.simpleName ?: _state.value.javaClass.name
+
+    private fun isStaleEpoch(epoch: Int, stage: String): Boolean {
+        if (epoch == turnEpoch) return false
+        logVoice("voice.staleEpochRejected stage=$stage epoch=$epoch currentTurnEpoch=$turnEpoch")
+        return true
+    }
+
     fun submitText(text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
@@ -92,16 +111,27 @@ class RayaOrchestrator(
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Voice
         sessionJob = scope.launch {}
+        logVoice(
+            "voice.startSession turnEpoch=$turnEpoch voiceSessionActive=${_voiceSessionActive.value} " +
+                "microphoneEnabled=${_microphoneEnabled.value} state=${stateName()}",
+        )
         launchInactivityMonitor()
         beginVoiceTurn(resetActivity = true)
     }
 
-    fun endVoiceSession() = endVoiceSessionInternal(notice = false)
+    fun endVoiceSession() = endVoiceSessionInternal(notice = false, reason = "user")
 
     fun toggleMicrophone() {
         if (!_voiceSessionActive.value) return
         val enable = !_microphoneEnabled.value
         _microphoneEnabled.value = enable
+        logVoice(
+            if (enable) {
+                "voice.micOn turnEpoch=$turnEpoch state=${stateName()} voiceSessionActive=${_voiceSessionActive.value}"
+            } else {
+                "voice.micOff turnEpoch=$turnEpoch state=${stateName()} voiceSessionActive=${_voiceSessionActive.value}"
+            },
+        )
         if (enable) {
             when {
                 _state.value == RayaState.Listening ||
@@ -121,6 +151,7 @@ class RayaOrchestrator(
         if (_state.value !is RayaState.Speaking) return
         val parent = sessionJob ?: return
         if (!parent.isActive) return
+        logVoice("voice.interrupt turnEpoch=$turnEpoch microphoneEnabled=${_microphoneEnabled.value}")
         if (_microphoneEnabled.value) {
             scope.launch(parent) {
                 beginVoiceTurn(resetActivity = true)
@@ -137,12 +168,12 @@ class RayaOrchestrator(
     }
 
     fun reportError(message: String) {
-        endVoiceSessionInternal(notice = false)
+        endVoiceSessionInternal(notice = false, reason = "reportError")
         _state.value = RayaState.Error(message)
     }
 
     fun reset() {
-        endVoiceSessionInternal(notice = false)
+        endVoiceSessionInternal(notice = false, reason = "reset")
         _state.value = RayaState.Idle
     }
 
@@ -151,7 +182,7 @@ class RayaOrchestrator(
     }
 
     fun close() {
-        endVoiceSessionInternal(notice = false)
+        endVoiceSessionInternal(notice = false, reason = "agentClose")
         speechRecognition.release()
         speechSynthesis.shutdown()
     }
@@ -163,6 +194,10 @@ class RayaOrchestrator(
         if (resetActivity) {
             lastUserActivityAt = now()
         }
+        logVoice(
+            "voice.beginTurn epoch=$epoch resetActivity=$resetActivity " +
+                "voiceSessionActive=${_voiceSessionActive.value} microphoneEnabled=${_microphoneEnabled.value}",
+        )
         scope.launch(parent) {
             runVoiceTurn(epoch)
         }
@@ -172,12 +207,17 @@ class RayaOrchestrator(
         val finalResult = CompletableDeferred<SpeechRecognitionEvent.Final>()
         _state.value = RayaState.Listening
         _userText.value = ""
+        logVoice(
+            "voice.turnStarting epoch=$epoch state=${stateName()} " +
+                "voiceSessionActive=${_voiceSessionActive.value} microphoneEnabled=${_microphoneEnabled.value}",
+        )
         speechRecognition.startListening(
             RecognitionRequest(
                 language = ConversationLanguage.Auto,
                 systemLanguageTag = systemLanguageTag(),
             ),
         )
+        logVoice("voice.turnListeningStarted epoch=$epoch")
         val collector = launch {
             speechRecognition.events.collect { event ->
                 when (event) {
@@ -186,10 +226,15 @@ class RayaOrchestrator(
                         _userText.value = event.text
                     }
                     is SpeechRecognitionEvent.Final -> {
+                        logVoice("voice.final epoch=$epoch detectedLanguageTag=${event.detectedLanguageTag ?: "null"}")
                         _userText.value = event.text
                         finalResult.complete(event)
                     }
                     is SpeechRecognitionEvent.Error -> {
+                        logVoice(
+                            "voice.recognitionError epoch=$epoch reason=${event.reason} " +
+                                "message=${event.message}",
+                        )
                         if (!finalResult.isCompleted) {
                             finalResult.completeExceptionally(RecognitionFailure(event.reason, event.message))
                         }
@@ -200,16 +245,17 @@ class RayaOrchestrator(
         try {
             val result = finalResult.await()
             collector.cancelAndJoin()
-            if (epoch != turnEpoch) return
+            if (isStaleEpoch(epoch, "final")) return
             onVoiceFinal(result, epoch)
         } catch (failure: RecognitionFailure) {
             collector.cancelAndJoin()
-            if (epoch != turnEpoch) return
+            if (isStaleEpoch(epoch, "recognitionError")) return
             when (failure.reason) {
                 SpeechRecognitionErrorReason.NoSpeech,
                 SpeechRecognitionErrorReason.NoMatch,
                 -> {
                     if (_voiceSessionActive.value && _microphoneEnabled.value) {
+                        logVoice("voice.recoverableRestart epoch=$epoch reason=${failure.reason}")
                         beginVoiceTurn(resetActivity = false)
                     } else {
                         _state.value = RayaState.Idle
@@ -223,6 +269,11 @@ class RayaOrchestrator(
     private suspend fun onVoiceFinal(result: SpeechRecognitionEvent.Final, epoch: Int) {
         lastUserActivityAt = now()
         val recognizedText = result.text.trim()
+        logVoice(
+            "voice.processingFinal epoch=$epoch resolvedLanguageTag=" +
+                "${ConversationLanguage.Auto.resolveLanguageTag(result.detectedLanguageTag, systemLanguageTag())} " +
+                "state=${stateName()}",
+        )
         if (recognizedText.isEmpty()) {
             if (_voiceSessionActive.value && _microphoneEnabled.value) {
                 beginVoiceTurn(resetActivity = false)
@@ -253,19 +304,19 @@ class RayaOrchestrator(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
-            if (epoch != turnEpoch) return
+            if (isStaleEpoch(epoch, "reply")) return
             failVoiceSession(failure.message ?: "Голосовой pipeline завершился с ошибкой.")
             return
         }
 
-        if (epoch != turnEpoch) return
+        if (isStaleEpoch(epoch, "highlight")) return
         _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response))
         _state.value = RayaState.Speaking(response)
 
         val outcome = runCatching {
             speechSynthesis.speak(response, Locale.forLanguageTag(resolvedLanguageTag))
         }
-        if (epoch != turnEpoch) return
+        if (isStaleEpoch(epoch, "speak")) return
         currentCoroutineContext().ensureActive()
         val speakFailure = outcome.exceptionOrNull()
         if (speakFailure is CancellationException) {
@@ -292,14 +343,19 @@ class RayaOrchestrator(
                 delay(INACTIVITY_CHECK_INTERVAL_MS)
                 if (!_voiceSessionActive.value) break
                 if (now() - lastUserActivityAt >= inactivityTimeoutMs()) {
-                    endVoiceSessionInternal(notice = true)
+                    logVoice(
+                        "voice.inactivityTimeout turnEpoch=$turnEpoch " +
+                            "inactivityMs=${now() - lastUserActivityAt}",
+                    )
+                    endVoiceSessionInternal(notice = true, reason = "inactivity")
                     break
                 }
             }
         }
     }
 
-    private fun endVoiceSessionInternal(notice: Boolean) {
+    private fun endVoiceSessionInternal(notice: Boolean, reason: String) {
+        val wasActive = _voiceSessionActive.value
         turnEpoch++
         sessionJob?.cancel()
         sessionJob = null
@@ -308,6 +364,12 @@ class RayaOrchestrator(
         _voiceSessionActive.value = false
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Text
+        if (wasActive) {
+            logVoice(
+                "voice.endSession reason=$reason notice=$notice turnEpoch=$turnEpoch " +
+                    "state=${stateName()}",
+            )
+        }
         if (notice) {
             _conversation.value = appendMessage(
                 ConversationMessage(ConversationRole.Notice, "Голосовой чат завершён из-за неактивности."),
@@ -319,7 +381,8 @@ class RayaOrchestrator(
     }
 
     private fun failVoiceSession(message: String) {
-        endVoiceSessionInternal(notice = false)
+        logVoice("voice.fatalSessionFailure error=$message")
+        endVoiceSessionInternal(notice = false, reason = "fatal($message)")
         _state.value = RayaState.Error(message)
     }
 
@@ -332,6 +395,7 @@ class RayaOrchestrator(
             .takeLast(MAX_LLM_CONTEXT_MESSAGES)
 
     companion object {
+        const val TAG = "Raya-Voice"
         const val MAX_LLM_CONTEXT_MESSAGES = 20
         const val MAX_CONVERSATION_MESSAGES = 100
         const val USER_INACTIVITY_TIMEOUT_MS = 3 * 60 * 1000L
