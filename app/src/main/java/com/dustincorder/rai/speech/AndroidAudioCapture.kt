@@ -53,6 +53,8 @@ class AndroidAudioCapture : AudioCapture {
                     bytes.write((sample ushr 8) and 0xff)
                 }
                 when (endpointDetector.acceptPcm16(samples.copyOf(count))) {
+                    EndpointDecision.SpeechConfirmed,
+                    -> Unit
                     EndpointDecision.EndUtterance -> break
                     EndpointDecision.DropTooShort -> {
                         bytes.reset()

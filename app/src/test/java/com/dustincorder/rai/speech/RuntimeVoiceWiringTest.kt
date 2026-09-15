@@ -43,7 +43,7 @@ class RuntimeVoiceWiringTest {
     fun `groq adapter captures endpoint transcribes and emits final`() = runBlocking {
         val capture = FakeAudioCapture()
         val transcription = FakeTranscriptionProvider()
-        val providerScope = CoroutineScope(Dispatchers.Unconfined)
+        val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
         val provider = WhisperSpeechRecognitionProvider(
             scope = providerScope,
             audioCapture = capture,
@@ -73,7 +73,7 @@ class RuntimeVoiceWiringTest {
         val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.System))
         val system = FakeRecognitionProvider(SpeechRecognitionEvent.Final("system", "en-US"))
         val groq = FakeRecognitionProvider(SpeechRecognitionEvent.Final("groq", "en-US"))
-        val providerScope = CoroutineScope(Dispatchers.Unconfined)
+        val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
         val runtime = RuntimeSpeechRecognitionProvider(
             scope = providerScope,
             settings = settings,
@@ -101,7 +101,7 @@ class RuntimeVoiceWiringTest {
         val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.GroqWhisper))
         val groq = FakeRecognitionProvider(SpeechRecognitionEvent.Final("groq", "ru-RU"))
         val system = FakeRecognitionProvider(SpeechRecognitionEvent.Final("system", "ru-RU"))
-        val providerScope = CoroutineScope(Dispatchers.Unconfined)
+        val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
         val runtime = RuntimeSpeechRecognitionProvider(
             scope = providerScope,
             settings = settings,
@@ -128,7 +128,7 @@ class RuntimeVoiceWiringTest {
     fun `cancel stops whisper capture before transcription`() = runTest {
         val capture = BlockingAudioCapture()
         val transcription = FakeTranscriptionProvider()
-        val providerScope = CoroutineScope(Dispatchers.Unconfined)
+        val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
         val provider = WhisperSpeechRecognitionProvider(
             providerScope,
             capture,
@@ -140,9 +140,9 @@ class RuntimeVoiceWiringTest {
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "ru-RU",
         ))
-        runCurrent()
+        withTimeout(2_000) { while (!capture.started) kotlinx.coroutines.delay(10) }
         provider.cancel()
-        runCurrent()
+        withTimeout(2_000) { while (!capture.cancelled) kotlinx.coroutines.delay(10) }
 
         assertTrue(capture.cancelled)
         assertFalse(transcription.called)
@@ -187,12 +187,14 @@ private class FakeAudioCapture : AudioCapture {
 }
 
 private class BlockingAudioCapture : AudioCapture {
+    @Volatile var started = false
     var cancelled = false
     override suspend fun recordUtterance(
         endpointDetector: com.dustincorder.rai.domain.VoiceActivityDetector,
         sampleRateHz: Int,
         channels: Int,
     ): AudioUtterance {
+        started = true
         try {
             kotlinx.coroutines.awaitCancellation()
         } catch (cancel: kotlinx.coroutines.CancellationException) {
@@ -215,7 +217,7 @@ private class FakeTranscriptionProvider : SpeechTranscriptionProvider {
 private class FakeRecognitionProvider(
     private val event: SpeechRecognitionEvent,
 ) : SpeechRecognitionProvider {
-    private val source = MutableSharedFlow<SpeechRecognitionEvent>(extraBufferCapacity = 1)
+    private val source = MutableSharedFlow<SpeechRecognitionEvent>(replay = 1, extraBufferCapacity = 1)
     override val events: SharedFlow<SpeechRecognitionEvent> = source.asSharedFlow()
     var startCount = 0
     override suspend fun startListening(request: com.dustincorder.rai.domain.RecognitionRequest) {

@@ -55,7 +55,7 @@ class AndroidBargeInMonitor : BargeInMonitor {
                 while (running.get()) {
                     val count = localRecorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (count <= 0) continue
-                    if (detector.acceptPcm16(buffer.copyOf(count)) == com.dustincorder.rai.domain.EndpointDecision.EndUtterance) {
+                    if (detector.acceptPcm16(buffer.copyOf(count)) == com.dustincorder.rai.domain.EndpointDecision.SpeechConfirmed) {
                         onConfirmedSpeech()
                         detector.reset()
                     }

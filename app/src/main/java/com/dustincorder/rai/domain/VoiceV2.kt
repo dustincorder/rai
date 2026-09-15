@@ -34,6 +34,7 @@ interface SpeechTranscriptionProvider {
 
 enum class EndpointDecision {
     Continue,
+    SpeechConfirmed,
     EndUtterance,
     DropTooShort,
 }
@@ -63,12 +64,16 @@ class VoiceActivityDetector(
         elapsedMs += frameMs
         val rms = rms(frame)
         totalFrames++
+        var justConfirmed = false
         if (rms >= rmsThreshold) {
             voicedFrames++
             sawSpeech = true
             speechMs += frameMs
             silenceMs = 0L
-            if (speechMs >= speechConfirmationMs) confirmedSpeech = true
+            if (speechMs >= speechConfirmationMs && !confirmedSpeech) {
+                confirmedSpeech = true
+                justConfirmed = true
+            }
         } else if (sawSpeech) {
             silenceMs += frameMs
         }
@@ -80,7 +85,7 @@ class VoiceActivityDetector(
                 EndpointDecision.DropTooShort
             }
         }
-        return EndpointDecision.Continue
+        return if (justConfirmed) EndpointDecision.SpeechConfirmed else EndpointDecision.Continue
     }
 
     fun reset() {

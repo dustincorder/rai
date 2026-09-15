@@ -135,12 +135,12 @@ fun SettingsScreen(
                                 onCheckedChange = { draft = draft.copy(customAllowInsecureHttp = it) },
                             )
                             Text(
-                                "Разрешить небезопасный HTTP",
+                                stringResource(R.string.unsafe_http),
                                 modifier = Modifier.padding(start = 8.dp),
                             )
                         }
                         Text(
-                            "HTTP не шифрует запросы и API key. Используйте только для доверенного локального сервера.",
+                            stringResource(R.string.unsafe_http_warning),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -246,11 +246,12 @@ fun SettingsScreen(
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(stringResource(R.string.voice_section), style = MaterialTheme.typography.titleMedium)
-                    Text("STT engine", style = MaterialTheme.typography.labelMedium)
+                    val systemEngineLabel = stringResource(R.string.system_engine)
+                    Text(stringResource(R.string.stt_engine), style = MaterialTheme.typography.labelMedium)
                     ChipGrid(
                         SttEngine.entries,
                         draft.sttEngine,
-                        { if (it == SttEngine.GroqWhisper) "Groq Whisper" else "System" },
+                        { if (it == SttEngine.GroqWhisper) "Groq Whisper" else systemEngineLabel },
                     ) { draft = draft.copy(sttEngine = it) }
                     Text(stringResource(R.string.stt_model), style = MaterialTheme.typography.labelMedium)
                     OutlinedTextField(
@@ -265,11 +266,11 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text("TTS engine", style = MaterialTheme.typography.labelMedium)
+                    Text(stringResource(R.string.tts_engine), style = MaterialTheme.typography.labelMedium)
                     ChipGrid(
                         TtsEngine.entries.filter { it != TtsEngine.LocalNeural || TtsModelCatalog.localNeuralAvailable },
                         draft.ttsEngine,
-                        { if (it == TtsEngine.LocalNeural) "Local Neural" else "System" },
+                        { if (it == TtsEngine.LocalNeural) "Local Neural" else systemEngineLabel },
                     ) { draft = draft.copy(ttsEngine = it) }
                     if (!TtsModelCatalog.localNeuralAvailable) {
                         Text(
@@ -278,17 +279,6 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                }
-            }
-
-            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(R.string.language), style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        stringResource(R.string.language_auto),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
 
