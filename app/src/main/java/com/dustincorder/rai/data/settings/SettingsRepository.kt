@@ -41,6 +41,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             modelId = preferences[MODEL] ?: provider.defaultModel,
             useCustomModel = preferences[USE_CUSTOM_MODEL] ?: false,
             customModelId = preferences[CUSTOM_MODEL_ID].orEmpty(),
+            sttModelId = preferences[STT_MODEL] ?: "whisper-large-v3-turbo",
             conversationLanguage = decodeLanguage(preferences[LANGUAGE] ?: "auto"),
             customAllowInsecureHttp = preferences[ALLOW_INSECURE_HTTP] ?: false,
         )
@@ -83,6 +84,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             it[MODEL] = settings.modelId
             it[USE_CUSTOM_MODEL] = settings.useCustomModel
             it[CUSTOM_MODEL_ID] = settings.customModelId
+            it[STT_MODEL] = settings.sttModelId
             it[LANGUAGE] = encodeLanguage(settings.conversationLanguage)
             it[ALLOW_INSECURE_HTTP] = settings.customAllowInsecureHttp
         }
@@ -114,6 +116,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
         val MODEL = stringPreferencesKey("model")
         val USE_CUSTOM_MODEL = booleanPreferencesKey("use_custom_model")
         val CUSTOM_MODEL_ID = stringPreferencesKey("custom_model_id")
+        val STT_MODEL = stringPreferencesKey("stt_model_id")
         val MODEL_CACHE = stringPreferencesKey("model_cache_json")
         val LANGUAGE = stringPreferencesKey("conversation_language")
         val ALLOW_INSECURE_HTTP = booleanPreferencesKey("custom_allow_insecure_http")

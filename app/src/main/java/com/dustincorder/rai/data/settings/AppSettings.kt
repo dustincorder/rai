@@ -26,6 +26,7 @@ data class AppSettings(
     val modelId: String = LlmProviderPreset.OpenAI.defaultModel,
     val useCustomModel: Boolean = false,
     val customModelId: String = "",
+    val sttModelId: String = "whisper-large-v3-turbo",
     val conversationLanguage: ConversationLanguage = ConversationLanguage.Auto,
     val customAllowInsecureHttp: Boolean = false,
 ) {
