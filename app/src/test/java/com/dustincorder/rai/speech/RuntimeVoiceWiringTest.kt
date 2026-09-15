@@ -52,7 +52,6 @@ class RuntimeVoiceWiringTest {
             languageHint = { null },
         )
 
-        val event = async(Dispatchers.Default) { provider.events.first() }
         provider.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "ru-RU",
@@ -60,10 +59,38 @@ class RuntimeVoiceWiringTest {
 
         assertEquals(
             SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"),
-            withTimeout(5_000) { event.await() },
+            withTimeout(5_000) { provider.events.first() },
         )
         assertEquals("whisper-large-v3-turbo", transcription.lastModel)
         assertTrue(capture.called)
+        provider.release()
+        providerScope.cancel()
+    }
+
+    @Test
+    fun `handoff pcm reaches one whisper capture without a second utterance`() = runTest {
+        val capture = FakeAudioCapture()
+        val transcription = FakeTranscriptionProvider()
+        val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
+        val provider = WhisperSpeechRecognitionProvider(
+            scope = providerScope,
+            audioCapture = capture,
+            transcription = transcription,
+            model = { "whisper-large-v3-turbo" },
+            languageHint = { null },
+        )
+        val event = async { provider.events.first() }
+        runCurrent()
+        provider.startListening(
+            com.dustincorder.rai.domain.RecognitionRequest(
+                com.dustincorder.rai.domain.ConversationLanguage.Auto,
+                "ru-RU",
+            ),
+            com.dustincorder.rai.domain.BargeInHandoff(byteArrayOf(1, 2, 3, 4), 16_000),
+        )
+
+        assertEquals(SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"), event.await())
+        assertEquals(byteArrayOf(1, 2, 3, 4).toList(), capture.initialPcm.toList())
         provider.release()
         providerScope.cancel()
     }
@@ -81,15 +108,12 @@ class RuntimeVoiceWiringTest {
             groq = groq,
             system = system,
         )
-        val event = async { runtime.events.first() }
-        runCurrent()
-
         runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "en-US",
         ))
 
-        assertEquals("system", (event.await() as SpeechRecognitionEvent.Final).text)
+        assertEquals("system", (runtime.events.first() as SpeechRecognitionEvent.Final).text)
         assertEquals(1, system.startCount)
         assertEquals(0, groq.startCount)
         runtime.release()
@@ -109,15 +133,12 @@ class RuntimeVoiceWiringTest {
             groq = groq,
             system = system,
         )
-        val event = async { runtime.events.first() }
-        runCurrent()
-
         runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "ru-RU",
         ))
 
-        assertEquals("groq", (event.await() as SpeechRecognitionEvent.Final).text)
+        assertEquals("groq", (runtime.events.first() as SpeechRecognitionEvent.Final).text)
         assertEquals(1, groq.startCount)
         assertEquals(0, system.startCount)
         runtime.cancel()
@@ -176,12 +197,15 @@ class RuntimeVoiceWiringTest {
 
 private class FakeAudioCapture : AudioCapture {
     var called = false
+    var initialPcm = ByteArray(0)
     override suspend fun recordUtterance(
         endpointDetector: com.dustincorder.rai.domain.VoiceActivityDetector,
         sampleRateHz: Int,
         channels: Int,
+        initialPcm16: ByteArray,
     ): AudioUtterance {
         called = true
+        initialPcm = initialPcm16
         return AudioUtterance(ByteArray(32), sampleRateHz, channels, confirmedSpeechMs = 250, voicedRatio = 0.5)
     }
 }
@@ -193,6 +217,7 @@ private class BlockingAudioCapture : AudioCapture {
         endpointDetector: com.dustincorder.rai.domain.VoiceActivityDetector,
         sampleRateHz: Int,
         channels: Int,
+        initialPcm16: ByteArray,
     ): AudioUtterance {
         started = true
         try {

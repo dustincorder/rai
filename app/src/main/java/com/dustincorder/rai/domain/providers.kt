@@ -28,8 +28,18 @@ interface SpeechRecognitionProvider {
 
 /** Optional acoustic monitor used only while TTS is speaking. */
 interface BargeInMonitor {
-    fun start(onConfirmedSpeech: () -> Unit)
+    fun start(onConfirmedSpeech: (BargeInHandoff) -> Unit)
     fun stop()
+}
+
+data class BargeInHandoff(
+    val pcm16: ByteArray,
+    val sampleRateHz: Int,
+    val channels: Int = 1,
+)
+
+interface HandoffSpeechRecognitionProvider {
+    suspend fun startListening(request: RecognitionRequest, handoff: BargeInHandoff)
 }
 
 interface SpeechSynthesisProvider {

@@ -8,6 +8,7 @@ interface AudioCapture {
         endpointDetector: VoiceActivityDetector,
         sampleRateHz: Int = 16_000,
         channels: Int = 1,
+        initialPcm16: ByteArray = ByteArray(0),
     ): AudioUtterance
 }
 
@@ -23,6 +24,10 @@ data class TranscriptionResult(
     val text: String,
     val languageTag: String?,
 )
+
+fun interface SpeechFrameClassifier {
+    fun isSpeech(frame: ShortArray): Boolean
+}
 
 interface SpeechTranscriptionProvider {
     suspend fun transcribe(
@@ -48,8 +53,9 @@ class VoiceActivityDetector(
     private val minimumSpeechMs: Long = 250,
     private val trailingSilenceMs: Long = 1_400,
     private val maximumUtteranceMs: Long = 30_000,
-    private val rmsThreshold: Double = 0.015,
+    private val rmsThreshold: Double = 0.003,
     private val speechConfirmationMs: Long = 200,
+    private val speechClassifier: SpeechFrameClassifier? = null,
 ) {
     private var elapsedMs = 0L
     private var speechMs = 0L
@@ -65,7 +71,10 @@ class VoiceActivityDetector(
         val rms = rms(frame)
         totalFrames++
         var justConfirmed = false
-        if (rms >= rmsThreshold) {
+        // Runtime Android supplies a real offline classifier; energy remains only the
+        // deterministic fallback for platform/tests where no classifier is available.
+        val speechFrame = speechClassifier?.isSpeech(frame) ?: (rms >= rmsThreshold)
+        if (speechFrame && rms >= rmsThreshold) {
             voicedFrames++
             sawSpeech = true
             speechMs += frameMs

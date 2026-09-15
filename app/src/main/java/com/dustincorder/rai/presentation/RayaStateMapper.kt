@@ -1,5 +1,6 @@
 package com.dustincorder.rai.presentation
 
+import com.dustincorder.rai.R
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaEmotion
@@ -70,6 +71,7 @@ fun rayaUiStateFor(
             gaze = RayaGaze.Alert,
         ),
         status = "Слушаю",
+        statusResId = R.string.status_listening,
         userText = recognizedText,
         conversation = conversation,
         isBusy = true,
@@ -85,6 +87,7 @@ fun rayaUiStateFor(
             gaze = RayaGaze.Up,
         ),
         status = if (streamingText.isBlank()) "Размышляю" else "Отвечаю",
+        statusResId = if (streamingText.isBlank()) R.string.status_thinking else R.string.status_answering,
         conversation = conversation,
         isBusy = true,
         interactionMode = interactionMode,
@@ -100,6 +103,7 @@ fun rayaUiStateFor(
             speaking = true,
         ),
         status = "Говорю",
+        statusResId = R.string.status_speaking,
         conversation = conversation,
         isBusy = true,
         isSpeaking = true,
@@ -115,6 +119,7 @@ fun rayaUiStateFor(
             gaze = RayaGaze.Wide,
         ),
         status = "Сбой системы",
+        statusResId = R.string.status_error,
         conversation = conversation,
         errorMessage = state.message,
         interactionMode = interactionMode,

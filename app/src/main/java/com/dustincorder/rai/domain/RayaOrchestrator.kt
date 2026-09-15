@@ -295,7 +295,11 @@ class RayaOrchestrator(
         speechSynthesis.shutdown()
     }
 
-    private fun beginVoiceTurn(resetActivity: Boolean, explicitIntent: Boolean = false) {
+    private fun beginVoiceTurn(
+        resetActivity: Boolean,
+        explicitIntent: Boolean = false,
+        handoff: BargeInHandoff? = null,
+    ) {
         if (sessionJob?.isActive != true) return
         val parent = sessionJob ?: return
         if (explicitIntent) markUserTurnIntent()
@@ -308,11 +312,11 @@ class RayaOrchestrator(
                 "voiceSessionActive=${_voiceSessionActive.value} microphoneEnabled=${_microphoneEnabled.value}",
         )
         activeTurnJob = scope.launch(parent) {
-            runVoiceTurn(epoch)
+            runVoiceTurn(epoch, handoff)
         }
     }
 
-    private suspend fun CoroutineScope.runVoiceTurn(epoch: Int) {
+    private suspend fun CoroutineScope.runVoiceTurn(epoch: Int, handoff: BargeInHandoff? = null) {
         val finalResult = CompletableDeferred<SpeechRecognitionEvent.Final>()
         _state.value = RayaState.Listening
         _userText.value = ""
@@ -346,12 +350,15 @@ class RayaOrchestrator(
         }
         yield()
         try {
-            speechRecognition.startListening(
-                RecognitionRequest(
-                    language = ConversationLanguage.Auto,
-                    systemLanguageTag = systemLanguageTag(),
-                ),
+            val request = RecognitionRequest(
+                language = ConversationLanguage.Auto,
+                systemLanguageTag = systemLanguageTag(),
             )
+            if (handoff != null && speechRecognition is HandoffSpeechRecognitionProvider) {
+                speechRecognition.startListening(request, handoff)
+            } else {
+                speechRecognition.startListening(request)
+            }
             record("voice.turnListeningStarted epoch=$epoch")
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -440,7 +447,7 @@ class RayaOrchestrator(
         _streamingText.value = ""
         _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
         _state.value = RayaState.Speaking(response.text)
-        bargeInMonitor?.start barge@{
+        bargeInMonitor?.start barge@{ handoff ->
             val parent = sessionJob ?: return@barge
             scope.launch(parent) {
                 if (_state.value !is RayaState.Speaking) return@launch
@@ -449,7 +456,7 @@ class RayaOrchestrator(
                 activeTurnJob?.cancel()
                 _streamingText.value = ""
                 _state.value = RayaState.Listening
-                beginVoiceTurn(resetActivity = true)
+                beginVoiceTurn(resetActivity = true, handoff = handoff)
             }
         }
 

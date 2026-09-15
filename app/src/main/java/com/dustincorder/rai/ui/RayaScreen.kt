@@ -112,9 +112,9 @@ fun RayaScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Райя", fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.assistant_name), fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Голосовой ассистент",
+                            stringResource(R.string.assistant_subtitle),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -348,8 +348,8 @@ private fun VoiceControls(
             ) {
                 Column(Modifier.weight(1f, fill = true)) {
                     Text(stringResource(R.string.voice_chat), style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        state.status,
+                        Text(
+                            stringResource(state.statusResId),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -449,7 +449,7 @@ private fun ConversationArea(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "Начните разговор с Райей.",
+                stringResource(R.string.empty_conversation),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -551,7 +551,7 @@ private fun ThinkingBubble() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Райя",
+                    stringResource(R.string.assistant_name),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -625,7 +625,7 @@ private fun MessageBubble(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
         ) {
             Text(
-                if (isUser) "Вы" else "Райя",
+                if (isUser) stringResource(R.string.user_label) else stringResource(R.string.assistant_name),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = if (isUser) {

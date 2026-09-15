@@ -19,6 +19,7 @@ import com.dustincorder.rai.speech.LocalNeuralSpeechSynthesisProvider
 import com.dustincorder.rai.speech.RuntimeSpeechRecognitionProvider
 import com.dustincorder.rai.speech.RuntimeSpeechSynthesisProvider
 import com.dustincorder.rai.speech.SherpaOnnxLocalNeuralTtsEngine
+import com.dustincorder.rai.speech.SherpaSileroSpeechFrameClassifier
 import com.dustincorder.rai.speech.WhisperSpeechRecognitionProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +31,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 class RayaApplication : Application() {
-    val bargeInMonitor by lazy { AndroidBargeInMonitor() }
+    val bargeInMonitor by lazy { AndroidBargeInMonitor(this, ::debugVoice) }
     val settingsRepository by lazy { DataStoreSettingsRepository(this) }
     val apiKeyStore by lazy { AndroidApiKeyStore(this) }
     private val json by lazy { Json { ignoreUnknownKeys = true } }
@@ -78,6 +79,7 @@ class RayaApplication : Application() {
             ),
             model = { runBlocking { settingsRepository.settings.first().sttModelId } },
             languageHint = { null },
+            speechClassifier = runCatching { SherpaSileroSpeechFrameClassifier(assets) }.getOrNull(),
             diagnostics = { event -> debugVoice(event) },
         ),
         system = AndroidSpeechRecognitionProvider(this),

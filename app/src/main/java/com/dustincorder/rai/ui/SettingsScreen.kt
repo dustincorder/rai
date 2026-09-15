@@ -209,7 +209,7 @@ fun SettingsScreen(
                                 IconButton(onClick = { showKey = !showKey }) {
                                     Icon(
                                         if (showKey) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                                        contentDescription = if (showKey) "Скрыть ключ" else "Показать ключ",
+                                        contentDescription = stringResource(if (showKey) R.string.hide_key else R.string.show_key),
                                     )
                                 }
                                 IconButton(onClick = {
@@ -224,17 +224,17 @@ fun SettingsScreen(
                     )
                     when (apiKeyStatus) {
                         ApiKeyStatus.Configured -> Text(
-                            "API key сохранён",
+                            stringResource(R.string.api_key_saved),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         ApiKeyStatus.Missing -> Text(
-                            "API key не сохранён",
+                            stringResource(R.string.api_key_not_saved),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         ApiKeyStatus.Unreadable -> Text(
-                            "Не удалось прочитать сохранённый API key. Замените или удалите его.",
+                            stringResource(R.string.api_key_unreadable),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -267,10 +267,11 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(stringResource(R.string.tts_engine), style = MaterialTheme.typography.labelMedium)
+                    val localNeuralLabel = stringResource(R.string.local_neural_engine)
                     ChipGrid(
                         TtsEngine.entries.filter { it != TtsEngine.LocalNeural || TtsModelCatalog.localNeuralAvailable },
                         draft.ttsEngine,
-                        { if (it == TtsEngine.LocalNeural) "Local Neural" else systemEngineLabel },
+                        { if (it == TtsEngine.LocalNeural) localNeuralLabel else systemEngineLabel },
                     ) { draft = draft.copy(ttsEngine = it) }
                     if (!TtsModelCatalog.localNeuralAvailable) {
                         Text(

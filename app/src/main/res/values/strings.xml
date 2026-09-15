@@ -36,4 +36,7 @@
     <string name="voice_section">Voice</string><string name="stt_model">STT model</string><string name="stt_model_hint">Groq Whisper models are used for recorded-audio transcription.</string>
     <string name="local_neural_unavailable">Local Neural is unavailable until a model with verified redistribution rights is configured.</string>
     <string name="stt_engine">STT engine</string><string name="tts_engine">TTS engine</string><string name="system_engine">System</string>
+    <string name="show_key">Show key</string><string name="hide_key">Hide key</string><string name="api_key_saved">API key saved</string><string name="api_key_not_saved">API key not saved</string><string name="api_key_unreadable">Saved API key could not be read. Replace or delete it.</string>
+    <string name="status_ready">Ready to talk</string><string name="status_listening">Listening</string><string name="status_thinking">Thinking</string><string name="status_answering">Answering</string><string name="status_speaking">Speaking</string><string name="status_error">System error</string><string name="local_neural_engine">Local Neural</string>
+    <string name="assistant_name">Raya</string><string name="assistant_subtitle">Voice assistant</string><string name="empty_conversation">Start a conversation with Raya.</string><string name="user_label">You</string>
 </resources>

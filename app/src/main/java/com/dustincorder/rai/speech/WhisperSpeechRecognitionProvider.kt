@@ -1,13 +1,16 @@
 package com.dustincorder.rai.speech
 
 import com.dustincorder.rai.domain.AudioCapture
+import com.dustincorder.rai.domain.BargeInHandoff
 import com.dustincorder.rai.domain.RecognitionRequest
 import com.dustincorder.rai.domain.SpeechRecognitionErrorReason
 import com.dustincorder.rai.domain.SpeechRecognitionEvent
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
+import com.dustincorder.rai.domain.HandoffSpeechRecognitionProvider
 import com.dustincorder.rai.domain.SpeechTranscriptionProvider
 import com.dustincorder.rai.domain.VoiceActivityDetector
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -27,18 +30,30 @@ class WhisperSpeechRecognitionProvider(
     private val transcription: SpeechTranscriptionProvider,
     private val model: () -> String,
     private val languageHint: () -> String?,
+    private val speechClassifier: com.dustincorder.rai.domain.SpeechFrameClassifier? = null,
     private val diagnostics: (String) -> Unit = {},
-) : SpeechRecognitionProvider {
+) : SpeechRecognitionProvider, HandoffSpeechRecognitionProvider {
     private val _events = MutableSharedFlow<SpeechRecognitionEvent>(replay = 1, extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
     private var captureJob: Job? = null
 
     override suspend fun startListening(request: RecognitionRequest) {
+        startListeningInternal(request, null)
+    }
+
+    override suspend fun startListening(request: RecognitionRequest, handoff: BargeInHandoff) {
+        startListeningInternal(request, handoff)
+    }
+
+    private suspend fun startListeningInternal(request: RecognitionRequest, handoff: BargeInHandoff?) {
         if (captureJob?.isActive == true) return
-        captureJob = scope.launch {
+        captureJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             val started = System.currentTimeMillis()
             try {
-                val audio = audioCapture.recordUtterance(VoiceActivityDetector())
+                val audio = audioCapture.recordUtterance(
+                    VoiceActivityDetector(speechClassifier = speechClassifier),
+                    initialPcm16 = handoff?.pcm16 ?: ByteArray(0),
+                )
                 val endpointAt = System.currentTimeMillis()
                 diagnostics("stt.engine=groq-whisper model=${model()} endpointReason=vad endpointLatencyMs=${endpointAt - started}")
                 if (audio.confirmedSpeechMs < 200L || audio.voicedRatio < 0.10) {
@@ -79,13 +94,21 @@ class RuntimeSpeechRecognitionProvider(
     private val groq: SpeechRecognitionProvider,
     private val system: SpeechRecognitionProvider,
     private val diagnostics: (String) -> Unit = {},
-) : SpeechRecognitionProvider {
+) : SpeechRecognitionProvider, HandoffSpeechRecognitionProvider {
     private val _events = MutableSharedFlow<SpeechRecognitionEvent>(replay = 1, extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
     private var active: SpeechRecognitionProvider? = null
     private var forwardJob: Job? = null
 
     override suspend fun startListening(request: RecognitionRequest) {
+        startListeningInternal(request, null)
+    }
+
+    override suspend fun startListening(request: RecognitionRequest, handoff: BargeInHandoff) {
+        startListeningInternal(request, handoff)
+    }
+
+    private suspend fun startListeningInternal(request: RecognitionRequest, handoff: BargeInHandoff?) {
         val configured = settings.settings.first()
         val selected = if (configured.sttEngine == com.dustincorder.rai.data.settings.SttEngine.GroqWhisper) {
             val key = runCatching { keys.read(com.dustincorder.rai.data.settings.LlmProviderPreset.Groq) }.getOrNull()
@@ -103,11 +126,15 @@ class RuntimeSpeechRecognitionProvider(
         active?.cancel()
         forwardJob?.cancel()
         active = selected
-        forwardJob = scope.launch {
+        forwardJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             selected.events.collect { _events.emit(it) }
         }
         kotlinx.coroutines.yield()
-        selected.startListening(request)
+        if (handoff != null && selected is HandoffSpeechRecognitionProvider) {
+            selected.startListening(request, handoff)
+        } else {
+            selected.startListening(request)
+        }
     }
 
     override fun cancel() {

@@ -23,6 +23,7 @@ class AndroidAudioCapture : AudioCapture {
         endpointDetector: VoiceActivityDetector,
         sampleRateHz: Int,
         channels: Int,
+        initialPcm16: ByteArray,
     ): AudioUtterance = withContext(Dispatchers.IO) {
         val channelMask = if (channels == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
         val minBuffer = AudioRecord.getMinBufferSize(
@@ -38,11 +39,19 @@ class AndroidAudioCapture : AudioCapture {
             minBuffer,
         )
         val bytes = ByteArrayOutputStream()
+        bytes.write(initialPcm16)
         val samples = ShortArray(minBuffer / 2)
-        val echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
-        val noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
+        val echoCanceler = runCatching { AcousticEchoCanceler.create(recorder.audioSessionId) }.getOrNull()
+        val noiseSuppressor = runCatching { NoiseSuppressor.create(recorder.audioSessionId) }.getOrNull()
         try {
             recorder.startRecording()
+            if (initialPcm16.isNotEmpty()) {
+                val initialSamples = ShortArray(initialPcm16.size / 2) { index ->
+                    ((initialPcm16[index * 2].toInt() and 0xff) or
+                        (initialPcm16[index * 2 + 1].toInt() shl 8)).toShort()
+                }
+                endpointDetector.acceptPcm16(initialSamples)
+            }
             while (true) {
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val count = recorder.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)

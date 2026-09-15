@@ -86,4 +86,26 @@ class VoiceV2Test {
         assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(800)))
         assertTrue(true)
     }
+
+    @Test
+    fun `real vad abstraction confirms quiet classified speech above energy floor`() {
+        val detector = VoiceActivityDetector(
+            sampleRateHz = 1_000,
+            rmsThreshold = 0.003,
+            speechClassifier = SpeechFrameClassifier { true },
+        )
+
+        assertEquals(EndpointDecision.SpeechConfirmed, detector.acceptPcm16(ShortArray(250) { 200 }))
+    }
+
+    @Test
+    fun `speech classifier rejects impulse even when impulse is loud`() {
+        val detector = VoiceActivityDetector(
+            sampleRateHz = 1_000,
+            speechClassifier = SpeechFrameClassifier { frame -> frame.size > 200 },
+        )
+
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(100) { 20_000 }))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(1_400)))
+    }
 }
