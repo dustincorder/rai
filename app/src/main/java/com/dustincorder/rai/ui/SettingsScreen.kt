@@ -45,7 +45,6 @@ import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
-import com.dustincorder.rai.domain.ConversationLanguage
 import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
@@ -190,10 +189,12 @@ fun SettingsScreen(
 
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Язык разговора", style = MaterialTheme.typography.titleMedium)
-                    LanguageOptions(draft.conversationLanguage) {
-                        draft = draft.copy(conversationLanguage = it)
-                    }
+                    Text("Язык", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Язык разговора определяется автоматически.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -247,23 +248,5 @@ private fun <T> ChipGrid(
             }
             if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-    }
-}
-
-@Composable
-private fun LanguageOptions(selected: ConversationLanguage, onSelected: (ConversationLanguage) -> Unit) {
-    val options = listOf(
-        "Автоматически" to ConversationLanguage.Auto,
-        "Язык устройства" to ConversationLanguage.System,
-        "Русский" to ConversationLanguage.Explicit("ru-RU"),
-        "Українська" to ConversationLanguage.Explicit("uk-UA"),
-        "English" to ConversationLanguage.Explicit("en-US"),
-    )
-    options.forEach { (label, language) ->
-        FilterChip(
-            selected = selected == language,
-            onClick = { onSelected(language) },
-            label = { Text(label) },
-        )
     }
 }

@@ -1,6 +1,7 @@
 package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.presentation.model.RayaFaceState
 
 data class RayaUiState(
@@ -10,4 +11,7 @@ data class RayaUiState(
     val conversation: List<ConversationMessage> = emptyList(),
     val errorMessage: String? = null,
     val isBusy: Boolean = false,
+    val interactionMode: InteractionMode = InteractionMode.Text,
+    val voiceSessionActive: Boolean = false,
+    val microphoneEnabled: Boolean = true,
 )

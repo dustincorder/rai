@@ -34,7 +34,7 @@ class OpenAiCompatibleReplyProvider(
                 model,
                 buildList {
                     add(OpenAiMessage("system", systemPrompt))
-                    messages.forEach { message -> add(OpenAiMessage(message.role.transport, message.text)) }
+                    messages.forEach { message -> add(OpenAiMessage(message.role.transport, message.contextText)) }
                 },
             ),
         )
@@ -66,7 +66,7 @@ class AnthropicCompatibleReplyProvider(
                 model = model,
                 maxTokens = 512,
                 system = systemPrompt,
-                messages = messages.map { message -> AnthropicMessage(message.role.transport, message.text) },
+                messages = messages.map { message -> AnthropicMessage(message.role.transport, message.contextText) },
             ),
         )
         val request = Request.Builder()
@@ -86,6 +86,7 @@ private val ConversationRole.transport: String
     get() = when (this) {
         ConversationRole.User -> "user"
         ConversationRole.Assistant -> "assistant"
+        ConversationRole.Notice -> error("Notice messages must never be sent to the LLM.")
     }
 
 private suspend fun OkHttpClient.await(request: Request, json: Json): String = suspendCancellableCoroutine { continuation ->
