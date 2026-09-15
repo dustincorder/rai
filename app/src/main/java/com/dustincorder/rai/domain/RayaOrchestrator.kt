@@ -40,6 +40,7 @@ class RayaOrchestrator(
     private val speechRecognition: SpeechRecognitionProvider,
     private val speechSynthesis: SpeechSynthesisProvider,
     private val replyProvider: ReplyProvider,
+    private val bargeInMonitor: BargeInMonitor? = null,
     private val systemLanguageTag: () -> String = { Locale.getDefault().toLanguageTag() },
     private val routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     private val voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
@@ -439,6 +440,18 @@ class RayaOrchestrator(
         _streamingText.value = ""
         _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
         _state.value = RayaState.Speaking(response.text)
+        bargeInMonitor?.start barge@{
+            val parent = sessionJob ?: return@barge
+            scope.launch(parent) {
+                if (_state.value !is RayaState.Speaking) return@launch
+                record("voice.bargeIn confirmed")
+                speechSynthesis.stop()
+                activeTurnJob?.cancel()
+                _streamingText.value = ""
+                _state.value = RayaState.Listening
+                beginVoiceTurn(resetActivity = true)
+            }
+        }
 
         val ttsLanguageTag = response.languageTag
             ?.takeIf { it.isValidLanguageTag() }
@@ -454,6 +467,7 @@ class RayaOrchestrator(
         currentCoroutineContext().ensureActive()
         val speakFailure = outcome.exceptionOrNull()
         if (speakFailure is CancellationException) {
+            bargeInMonitor?.stop()
             _state.value = RayaState.Idle
             return
         }
@@ -463,9 +477,11 @@ class RayaOrchestrator(
         }
 
         if (!_voiceSessionActive.value || !_microphoneEnabled.value) {
+            bargeInMonitor?.stop()
             _state.value = RayaState.Idle
             return
         }
+        bargeInMonitor?.stop()
         beginVoiceTurn(resetActivity = true)
     }
 
@@ -499,6 +515,7 @@ class RayaOrchestrator(
         sessionJob?.cancel()
         sessionJob = null
         speechRecognition.cancel()
+        bargeInMonitor?.stop()
         speechSynthesis.stop()
         _voiceSessionActive.value = false
         _microphoneEnabled.value = true

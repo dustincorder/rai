@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.RayaApplication
 import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.BargeInMonitor
 import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaOrchestrator
@@ -27,6 +28,7 @@ class RayaViewModel(
     speechRecognition: SpeechRecognitionProvider,
     speechSynthesis: SpeechSynthesisProvider,
     replyProvider: ReplyProvider,
+    bargeInMonitor: BargeInMonitor? = null,
     routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
 ) : ViewModel() {
@@ -35,6 +37,7 @@ class RayaViewModel(
         speechRecognition = speechRecognition,
         speechSynthesis = speechSynthesis,
         replyProvider = replyProvider,
+        bargeInMonitor = bargeInMonitor,
         routingDiagnostics = routingDiagnostics,
         voiceDiagnostics = voiceDiagnostics,
     )
@@ -107,6 +110,7 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
         return RayaViewModel(
             speechRecognition = application.runtimeSpeechRecognitionProvider(),
             speechSynthesis = application.runtimeSpeechSynthesisProvider(),
+            bargeInMonitor = application.bargeInMonitor,
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
             voiceDiagnostics = AndroidRayaVoiceDiagnostics(),

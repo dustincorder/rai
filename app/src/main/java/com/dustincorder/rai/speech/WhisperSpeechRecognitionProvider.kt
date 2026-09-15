@@ -41,6 +41,11 @@ class WhisperSpeechRecognitionProvider(
                 val audio = audioCapture.recordUtterance(VoiceActivityDetector())
                 val endpointAt = System.currentTimeMillis()
                 diagnostics("stt.engine=groq-whisper model=${model()} endpointReason=vad endpointLatencyMs=${endpointAt - started}")
+                if (audio.confirmedSpeechMs < 200L || audio.voicedRatio < 0.10) {
+                    diagnostics("stt.discardedAsNoise=true confirmedSpeechMs=${audio.confirmedSpeechMs} voicedRatio=${audio.voicedRatio}")
+                    _events.emit(SpeechRecognitionEvent.Error(SpeechRecognitionErrorReason.NoSpeech, "Audio did not contain confirmed speech."))
+                    return@launch
+                }
                 val result = transcription.transcribe(audio, model(), languageHint())
                 diagnostics("stt.engine=groq-whisper model=${model()} detectedLanguage=${result.languageTag ?: "null"} transcriptionLatencyMs=${System.currentTimeMillis() - endpointAt}")
                 if (result.text.isNotBlank()) {

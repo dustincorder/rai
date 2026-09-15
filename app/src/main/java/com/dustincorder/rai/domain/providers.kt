@@ -26,6 +26,12 @@ interface SpeechRecognitionProvider {
     fun release()
 }
 
+/** Optional acoustic monitor used only while TTS is speaking. */
+interface BargeInMonitor {
+    fun start(onConfirmedSpeech: () -> Unit)
+    fun stop()
+}
+
 interface SpeechSynthesisProvider {
     suspend fun speak(text: String, locale: Locale = Locale("ru", "RU"))
     fun stop()

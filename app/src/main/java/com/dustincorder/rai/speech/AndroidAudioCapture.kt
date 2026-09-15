@@ -3,6 +3,8 @@ package com.dustincorder.rai.speech
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import com.dustincorder.rai.domain.AudioCapture
 import com.dustincorder.rai.domain.AudioUtterance
 import com.dustincorder.rai.domain.EndpointDecision
@@ -29,7 +31,7 @@ class AndroidAudioCapture : AudioCapture {
             AudioFormat.ENCODING_PCM_16BIT,
         ).coerceAtLeast(sampleRateHz / 2)
         val recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             sampleRateHz,
             channelMask,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -37,6 +39,8 @@ class AndroidAudioCapture : AudioCapture {
         )
         val bytes = ByteArrayOutputStream()
         val samples = ShortArray(minBuffer / 2)
+        val echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
+        val noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)
         try {
             recorder.startRecording()
             while (true) {
@@ -57,10 +61,18 @@ class AndroidAudioCapture : AudioCapture {
                     EndpointDecision.Continue -> Unit
                 }
             }
-            AudioUtterance(bytes.toByteArray(), sampleRateHz, channels)
+            AudioUtterance(
+                bytes.toByteArray(),
+                sampleRateHz,
+                channels,
+                endpointDetector.confirmedSpeechMs(),
+                endpointDetector.voicedRatio(),
+            )
         } finally {
             runCatching { recorder.stop() }
             recorder.release()
+            echoCanceler?.release()
+            noiseSuppressor?.release()
             bytes.reset()
         }
     }

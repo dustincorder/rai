@@ -20,6 +20,29 @@ class VoiceV2Test {
     }
 
     @Test
+    fun `default conversational pauses through 800ms do not finalize`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(250) { 4_000 }))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(300)))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(500)))
+    }
+
+    @Test
+    fun `default trailing silence finalizes after conservative endpoint`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        detector.acceptPcm16(ShortArray(250) { 4_000 })
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(800)))
+        assertEquals(EndpointDecision.EndUtterance, detector.acceptPcm16(ShortArray(600)))
+    }
+
+    @Test
+    fun `short isolated noise never confirms speech`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(100) { 4_000 }))
+        assertEquals(EndpointDecision.DropTooShort, detector.acceptPcm16(ShortArray(1_400)))
+    }
+
+    @Test
     fun `long trailing silence ends utterance`() {
         val detector = VoiceActivityDetector(
             minimumSpeechMs = 100,

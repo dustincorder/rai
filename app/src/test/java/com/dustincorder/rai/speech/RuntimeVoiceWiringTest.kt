@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -38,7 +40,7 @@ import org.junit.Test
 
 class RuntimeVoiceWiringTest {
     @Test
-    fun `groq adapter captures endpoint transcribes and emits final`() = runTest {
+    fun `groq adapter captures endpoint transcribes and emits final`() = runBlocking {
         val capture = FakeAudioCapture()
         val transcription = FakeTranscriptionProvider()
         val providerScope = CoroutineScope(Dispatchers.Unconfined)
@@ -50,8 +52,7 @@ class RuntimeVoiceWiringTest {
             languageHint = { null },
         )
 
-        val event = async { provider.events.first() }
-        runCurrent()
+        val event = async(Dispatchers.Default) { provider.events.first() }
         provider.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "ru-RU",
@@ -59,7 +60,7 @@ class RuntimeVoiceWiringTest {
 
         assertEquals(
             SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"),
-            event.await(),
+            withTimeout(5_000) { event.await() },
         )
         assertEquals("whisper-large-v3-turbo", transcription.lastModel)
         assertTrue(capture.called)
@@ -181,7 +182,7 @@ private class FakeAudioCapture : AudioCapture {
         channels: Int,
     ): AudioUtterance {
         called = true
-        return AudioUtterance(ByteArray(32), sampleRateHz, channels)
+        return AudioUtterance(ByteArray(32), sampleRateHz, channels, confirmedSpeechMs = 250, voicedRatio = 0.5)
     }
 }
 

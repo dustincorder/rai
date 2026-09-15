@@ -11,6 +11,7 @@ import com.dustincorder.rai.data.secrets.AndroidApiKeyStore
 import com.dustincorder.rai.data.settings.DataStoreSettingsRepository
 import com.dustincorder.rai.data.stt.GroqWhisperTranscriptionProvider
 import com.dustincorder.rai.speech.AndroidAudioCapture
+import com.dustincorder.rai.speech.AndroidBargeInMonitor
 import com.dustincorder.rai.speech.AndroidSpeechRecognitionProvider
 import com.dustincorder.rai.speech.AndroidSpeechSynthesisProvider
 import com.dustincorder.rai.speech.AndroidTtsModelPackStore
@@ -29,6 +30,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 class RayaApplication : Application() {
+    val bargeInMonitor by lazy { AndroidBargeInMonitor() }
     val settingsRepository by lazy { DataStoreSettingsRepository(this) }
     val apiKeyStore by lazy { AndroidApiKeyStore(this) }
     private val json by lazy { Json { ignoreUnknownKeys = true } }
