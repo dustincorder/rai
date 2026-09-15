@@ -74,6 +74,65 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `B2 session parent stays active across scheduler advancement and mic cycle restarts listening`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), FakeReplyProvider())
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+
+        assertTrue(orchestrator.voiceSessionActive.value)
+        assertEquals(1, recognition.startCount)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        assertFalse(orchestrator.microphoneEnabled.value)
+        assertEquals(1, recognition.startCount)
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+
+        assertTrue("mic on must restart listening even after scheduler advancement", orchestrator.microphoneEnabled.value)
+        assertEquals(2, recognition.startCount)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `B3 session parent survives full turn loop until explicit end`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B", "C"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, вопрос один", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+        synthesis.complete()
+        runCurrent()
+
+        assertTrue(orchestrator.voiceSessionActive.value)
+        assertEquals("auto-loop must open a second turn", 2, recognition.startCount)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue("session must not end on its own", orchestrator.voiceSessionActive.value)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+        assertFalse(orchestrator.voiceSessionActive.value)
+        assertEquals(InteractionMode.Text, orchestrator.interactionMode.value)
+    }
+
+    @Test
     fun `C voice response automatically returns to listening`() = runTest {
         val recognition = FakeRecognitionProvider()
         val synthesis = FakeSynthesisProvider()

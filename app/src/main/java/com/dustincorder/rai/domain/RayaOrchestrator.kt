@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
 import java.util.Locale
 
 fun interface RayaRoutingDiagnostics {
@@ -110,7 +111,7 @@ class RayaOrchestrator(
         _voiceSessionActive.value = true
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Voice
-        sessionJob = scope.launch {}
+        sessionJob = SupervisorJob(scope.coroutineContext[Job] ?: Job())
         logVoice(
             "voice.startSession turnEpoch=$turnEpoch voiceSessionActive=${_voiceSessionActive.value} " +
                 "microphoneEnabled=${_microphoneEnabled.value} state=${stateName()}",
