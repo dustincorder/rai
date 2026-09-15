@@ -43,8 +43,7 @@ private enum class EyeShape {
     Block,
     Chevron,
     Open,
-    ExcitedLeft,
-    ExcitedRight,
+    Excited,
     Wink,
     PlayfulWink,
     Attention,
@@ -197,7 +196,7 @@ private fun DrawScope.drawFace(
     }
     val (leftShape, rightShape) = when (state.emotion) {
         RayaFaceEmotion.Happy -> EyeShape.Chevron to EyeShape.Chevron
-        RayaFaceEmotion.Excited -> EyeShape.ExcitedLeft to EyeShape.ExcitedRight
+        RayaFaceEmotion.Excited -> EyeShape.Excited to EyeShape.Excited
         RayaFaceEmotion.Playful -> EyeShape.Open to EyeShape.Wink
         RayaFaceEmotion.Curious -> EyeShape.Flat to EyeShape.Block
         RayaFaceEmotion.SemanticThinking -> EyeShape.Thinking to EyeShape.Thinking
@@ -264,27 +263,11 @@ private fun DrawScope.drawEye(
             point(x - width * 0.3f, y - height * 0.3f),
             dimensions(width * 0.6f, height * 0.6f),
         )
-        EyeShape.ExcitedLeft -> drawPath(
-            path(listOf(
-                left to top,
-                x to top,
-                x to (top + height * 0.14f),
-                right to (top + height * 0.14f),
-                right to bottom,
-                left to bottom,
-            )),
-            color,
-        )
-        EyeShape.ExcitedRight -> drawPath(
-            path(listOf(
-                left to (top + height * 0.14f),
-                x to (top + height * 0.14f),
-                x to top,
-                right to top,
-                right to bottom,
-                left to bottom,
-            )),
-            color,
+        EyeShape.Excited -> drawRoundRect(
+            color = color,
+            topLeft = point(left, top),
+            size = dimensions(width, height),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(height * 0.14f),
         )
         EyeShape.Flat -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
         EyeShape.Wink -> drawRect(
