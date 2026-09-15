@@ -260,11 +260,17 @@ private fun DrawScope.drawEye(
             dimensions(width * 0.72f, thick),
         )
         EyeShape.Tired -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
-        EyeShape.Chevron -> {
-            val stroke = height * 0.28f
-            drawLine(color, point(left, bottom), point(x, top), stroke, StrokeCap.Square)
-            drawLine(color, point(x, top), point(right, bottom), stroke, StrokeCap.Square)
-        }
+        EyeShape.Chevron -> drawPath(
+            path(listOf(
+                left to bottom,
+                x to top,
+                right to bottom,
+                (right - width * 0.18f) to bottom,
+                x to (top + height * 0.32f),
+                (left + width * 0.18f) to bottom,
+            )),
+            color,
+        )
         EyeShape.Attention -> drawPath(
             path(listOf(left to (top + thick), (left + width * 0.2f) to top, right to top, right to bottom, left to bottom)),
             color,
@@ -276,12 +282,12 @@ private fun DrawScope.drawEye(
         )
         EyeShape.ConfusedLeft -> drawRect(
             color,
-            point(left + width * 0.08f, y - height * 0.34f),
+            point(left + width * 0.08f, y - height * 0.26f),
             dimensions(width * 0.84f, height * 0.42f),
         )
         EyeShape.ConfusedRight -> drawRect(
             color,
-            point(left + width * 0.08f, y - height * 0.08f),
+            point(left + width * 0.08f, y - height * 0.16f),
             dimensions(width * 0.84f, height * 0.42f),
         )
         EyeShape.ConcernedLeft -> drawPath(

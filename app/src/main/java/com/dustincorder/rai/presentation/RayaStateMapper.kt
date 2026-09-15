@@ -32,7 +32,7 @@ private val RayaEmotion.semanticGaze: RayaGaze
         RayaEmotion.Curious -> RayaGaze.Side
         RayaEmotion.Thinking -> RayaGaze.Side
         RayaEmotion.Skeptical -> RayaGaze.Alert
-        RayaEmotion.Confused -> RayaGaze.Side
+        RayaEmotion.Confused -> RayaGaze.Center
         RayaEmotion.Concerned -> RayaGaze.Up
         RayaEmotion.Sad,
         RayaEmotion.Embarrassed,

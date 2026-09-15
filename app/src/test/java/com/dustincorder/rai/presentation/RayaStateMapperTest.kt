@@ -5,6 +5,7 @@ import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaGaze
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -84,6 +85,14 @@ class RayaStateMapperTest {
 
         assertEquals(RayaFaceEmotion.Concerned, state.face.emotion)
         assertFalse(state.isSpeaking)
+    }
+
+    @Test
+    fun `confused expression keeps centered gaze`() {
+        val state = rayaUiStateFor(RayaState.Idle, semanticEmotion = RayaEmotion.Confused)
+
+        assertEquals(RayaFaceEmotion.Confused, state.face.emotion)
+        assertEquals(RayaGaze.Center, state.face.gaze)
     }
 
     @Test
