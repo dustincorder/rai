@@ -92,7 +92,9 @@ class VoiceV2Test {
         val detector = VoiceActivityDetector(
             sampleRateHz = 1_000,
             rmsThreshold = 0.003,
-            speechClassifier = SpeechFrameClassifier { true },
+            speechClassifier = object : SpeechFrameClassifier {
+                override fun isSpeech(frame: ShortArray) = true
+            },
         )
 
         assertEquals(EndpointDecision.SpeechConfirmed, detector.acceptPcm16(ShortArray(250) { 200 }))
@@ -102,10 +104,47 @@ class VoiceV2Test {
     fun `speech classifier rejects impulse even when impulse is loud`() {
         val detector = VoiceActivityDetector(
             sampleRateHz = 1_000,
-            speechClassifier = SpeechFrameClassifier { frame -> frame.size > 200 },
+            speechClassifier = object : SpeechFrameClassifier {
+                override fun isSpeech(frame: ShortArray) = frame.size > 200
+            },
         )
 
         assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(100) { 20_000 }))
         assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(1_400)))
+    }
+
+    @Test
+    fun `reset clears detector and resets stateful classifier once per utterance`() {
+        val classifier = CountingSpeechClassifier()
+        val detector = VoiceActivityDetector(
+            sampleRateHz = 1_000,
+            speechClassifier = classifier,
+        )
+
+        detector.acceptPcm16(ShortArray(250) { 200 })
+        detector.reset()
+        detector.acceptPcm16(ShortArray(250) { 200 })
+
+        assertEquals(1, classifier.resetCount)
+        assertEquals(2, classifier.frameCount)
+    }
+
+    private class CountingSpeechClassifier : SpeechFrameClassifier {
+        var frameCount = 0
+        var resetCount = 0
+        override fun isSpeech(frame: ShortArray): Boolean {
+            frameCount++
+            return true
+        }
+        override fun reset() { resetCount++ }
+    }
+
+    @Test
+    fun `barge in handoff gate claims audio only once`() {
+        val gate = BargeInHandoffGate()
+        val handoff = BargeInHandoff(byteArrayOf(1), 16_000)
+
+        assertEquals(handoff, gate.claim(handoff))
+        assertEquals(null, gate.claim(handoff))
     }
 }

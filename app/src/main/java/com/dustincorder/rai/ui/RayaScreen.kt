@@ -78,6 +78,8 @@ import com.dustincorder.rai.R
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.InteractionMode
+import com.dustincorder.rai.domain.RayaErrorCode
+import com.dustincorder.rai.domain.RayaNoticeCode
 import com.dustincorder.rai.presentation.RayaUiState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
@@ -219,7 +221,7 @@ private fun FaceHeader(
             StatusChip(state)
             if (state.errorMessage != null) {
                 Spacer(Modifier.height(12.dp))
-                ErrorBanner(state.errorMessage)
+                ErrorBanner(state.errorMessage, state.errorCode)
             }
         }
         Box(
@@ -363,9 +365,9 @@ private fun VoiceControls(
                     Icon(
                         if (state.microphoneEnabled) Icons.Outlined.Mic else Icons.Outlined.MicOff,
                         contentDescription = if (state.microphoneEnabled) {
-                            "Выключить микрофон"
+                            stringResource(R.string.mic_off)
                         } else {
-                            "Включить микрофон"
+                            stringResource(R.string.mic_on)
                         },
                     )
                 }
@@ -471,7 +473,7 @@ private fun ConversationArea(
             when (item) {
                 is ConversationMessage -> AppearingBubble {
                     when (item.role) {
-                        ConversationRole.Notice -> NoticeChip(item.text)
+                        ConversationRole.Notice -> NoticeChip(item.text, item.noticeCode)
                         else -> MessageBubble(item)
                     }
                 }
@@ -569,7 +571,7 @@ private fun ThinkingBubble() {
 }
 
 @Composable
-private fun NoticeChip(text: String) {
+private fun NoticeChip(text: String, noticeCode: RayaNoticeCode?) {
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -577,7 +579,11 @@ private fun NoticeChip(text: String) {
             shape = MaterialTheme.shapes.large,
         ) {
             Text(
-                text,
+                if (noticeCode == RayaNoticeCode.InactivityEnded) {
+                    stringResource(R.string.notice_inactivity)
+                } else {
+                    text
+                },
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
             )
@@ -586,7 +592,14 @@ private fun NoticeChip(text: String) {
 }
 
 @Composable
-private fun ErrorBanner(message: String) {
+private fun ErrorBanner(message: String, code: RayaErrorCode?) {
+    val localizedMessage = when (code) {
+        RayaErrorCode.ReplyUnavailable -> stringResource(R.string.error_reply_unavailable)
+        RayaErrorCode.RecognitionStartFailed -> stringResource(R.string.error_recognition_start)
+        RayaErrorCode.RecognitionFailed -> stringResource(R.string.error_recognition)
+        RayaErrorCode.VoicePipelineFailed -> stringResource(R.string.error_voice_pipeline)
+        null -> message
+    }
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -600,7 +613,7 @@ private fun ErrorBanner(message: String) {
         ) {
             Icon(Icons.Outlined.ErrorOutline, contentDescription = null, modifier = Modifier.size(20.dp))
             Text(
-                message,
+                localizedMessage,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f, fill = true),
             )

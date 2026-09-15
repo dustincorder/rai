@@ -2,6 +2,7 @@ package com.dustincorder.rai.presentation
 
 import androidx.annotation.StringRes
 import com.dustincorder.rai.R
+import com.dustincorder.rai.domain.RayaErrorCode
 
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.InteractionMode
@@ -14,6 +15,7 @@ data class RayaUiState(
     val userText: String = "",
     val conversation: List<ConversationMessage> = emptyList(),
     val errorMessage: String? = null,
+    val errorCode: RayaErrorCode? = null,
     val isBusy: Boolean = false,
     val isSpeaking: Boolean = false,
     val streamingText: String = "",

@@ -39,4 +39,6 @@
     <string name="show_key">Show key</string><string name="hide_key">Hide key</string><string name="api_key_saved">API key saved</string><string name="api_key_not_saved">API key not saved</string><string name="api_key_unreadable">Saved API key could not be read. Replace or delete it.</string>
     <string name="status_ready">Ready to talk</string><string name="status_listening">Listening</string><string name="status_thinking">Thinking</string><string name="status_answering">Answering</string><string name="status_speaking">Speaking</string><string name="status_error">System error</string><string name="local_neural_engine">Local Neural</string>
     <string name="assistant_name">Raya</string><string name="assistant_subtitle">Voice assistant</string><string name="empty_conversation">Start a conversation with Raya.</string><string name="user_label">You</string>
+    <string name="mic_off">Turn microphone off</string><string name="mic_on">Turn microphone on</string>
+    <string name="error_reply_unavailable">Could not get a reply.</string><string name="error_recognition_start">Could not start speech recognition.</string><string name="error_recognition">Speech recognition failed.</string><string name="error_voice_pipeline">Voice pipeline failed.</string><string name="notice_inactivity">Voice chat ended because of inactivity.</string>
 </resources>

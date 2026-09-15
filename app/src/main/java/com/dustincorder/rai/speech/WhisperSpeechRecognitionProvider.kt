@@ -50,6 +50,7 @@ class WhisperSpeechRecognitionProvider(
         captureJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             val started = System.currentTimeMillis()
             try {
+                speechClassifier?.reset()
                 val audio = audioCapture.recordUtterance(
                     VoiceActivityDetector(speechClassifier = speechClassifier),
                     initialPcm16 = handoff?.pcm16 ?: ByteArray(0),
@@ -83,7 +84,10 @@ class WhisperSpeechRecognitionProvider(
         captureJob = null
     }
 
-    override fun release() = cancel()
+    override fun release() {
+        cancel()
+        speechClassifier?.release()
+    }
 }
 
 /** Runtime selector. Cloud failures are surfaced; fallback happens only when Groq is unavailable. */

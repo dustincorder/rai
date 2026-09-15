@@ -638,7 +638,7 @@ class RayaOrchestratorTest {
         assertTrue(
             orchestrator.conversation.value.any {
                 it.role == ConversationRole.Notice &&
-                    it.text == RayaOrchestrator.INACTIVITY_NOTICE_MESSAGE
+                    it.noticeCode == RayaNoticeCode.InactivityEnded
             },
         )
     }
@@ -1233,7 +1233,7 @@ class RayaOrchestratorTest {
         runCurrent()
         assertFalse("inactivity timeout must fire once the user is waiting again", orchestrator.voiceSessionActive.value)
         assertTrue(
-            orchestrator.conversation.value.any { it.role == ConversationRole.Notice && it.text == RayaOrchestrator.INACTIVITY_NOTICE_MESSAGE },
+            orchestrator.conversation.value.any { it.role == ConversationRole.Notice && it.noticeCode == RayaNoticeCode.InactivityEnded },
         )
     }
 

@@ -7,6 +7,7 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import com.dustincorder.rai.domain.BargeInMonitor
 import com.dustincorder.rai.domain.BargeInHandoff
+import com.dustincorder.rai.domain.BargeInHandoffGate
 import com.dustincorder.rai.domain.VoiceActivityDetector
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.ArrayDeque
@@ -20,7 +21,7 @@ class AndroidBargeInMonitor(
     context: android.content.Context,
     private val diagnostics: (String) -> Unit = {},
 ) : BargeInMonitor {
-    private val speechClassifier = runCatching { SherpaSileroSpeechFrameClassifier(context.assets) }.getOrNull()
+    private val assetManager = context.assets
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
     private var recorder: AudioRecord? = null
@@ -28,8 +29,9 @@ class AndroidBargeInMonitor(
     override fun start(onConfirmedSpeech: (BargeInHandoff) -> Unit) {
         stop()
         running.set(true)
-        val callbackConsumed = AtomicBoolean(false)
+        val handoffGate = BargeInHandoffGate()
         worker = thread(name = "raya-barge-in", start = true) {
+            val speechClassifier = runCatching { SherpaSileroSpeechFrameClassifier(assetManager, diagnostics) }.getOrNull()
             val sampleRate = 16_000
             val bufferSize = AudioRecord.getMinBufferSize(
                 sampleRate,
@@ -73,16 +75,14 @@ class AndroidBargeInMonitor(
                         if (preRoll.size > maxPreRollSamples) preRoll.removeFirst()
                     }
                     val decision = detector.acceptPcm16(frame)
-                    if (decision == com.dustincorder.rai.domain.EndpointDecision.SpeechConfirmed &&
-                        callbackConsumed.compareAndSet(false, true)
-                    ) {
+                    if (decision == com.dustincorder.rai.domain.EndpointDecision.SpeechConfirmed) {
                         val handoffBytes = ByteArray(preRoll.size * 2)
                         preRoll.forEachIndexed { index, sample ->
                             handoffBytes[index * 2] = (sample.toInt() and 0xff).toByte()
                             handoffBytes[index * 2 + 1] = (sample.toInt() ushr 8).toByte()
                         }
                         val handoff = BargeInHandoff(handoffBytes, sampleRate, 1)
-                        onConfirmedSpeech(handoff)
+                        handoffGate.claim(handoff)?.let(onConfirmedSpeech)
                         return@thread
                     }
                 }
@@ -91,6 +91,7 @@ class AndroidBargeInMonitor(
                 localRecorder.release()
                 echo?.release()
                 noise?.release()
+                speechClassifier?.release()
                 recorder = null
             }
         }

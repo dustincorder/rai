@@ -1,6 +1,7 @@
 package com.dustincorder.rai.domain
 
 import kotlin.math.sqrt
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Audio-only STT seam. Implementations own microphone permissions and platform APIs. */
 interface AudioCapture {
@@ -25,8 +26,16 @@ data class TranscriptionResult(
     val languageTag: String?,
 )
 
-fun interface SpeechFrameClassifier {
+interface SpeechFrameClassifier {
     fun isSpeech(frame: ShortArray): Boolean
+    fun reset() = Unit
+    fun release() = Unit
+}
+
+class BargeInHandoffGate {
+    private val claimed = AtomicBoolean(false)
+    fun claim(handoff: BargeInHandoff): BargeInHandoff? =
+        handoff.takeIf { claimed.compareAndSet(false, true) }
 }
 
 interface SpeechTranscriptionProvider {
@@ -105,6 +114,11 @@ class VoiceActivityDetector(
         confirmedSpeech = false
         voicedFrames = 0L
         totalFrames = 0L
+        speechClassifier?.reset()
+    }
+
+    fun release() {
+        speechClassifier?.release()
     }
 
     fun confirmedSpeechMs(): Long = speechMs.takeIf { confirmedSpeech } ?: 0L

@@ -28,8 +28,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.util.Locale
@@ -68,7 +67,7 @@ class RuntimeVoiceWiringTest {
     }
 
     @Test
-    fun `handoff pcm reaches one whisper capture without a second utterance`() = runTest {
+    fun `handoff pcm reaches one whisper capture without a second utterance`() = runBlocking {
         val capture = FakeAudioCapture()
         val transcription = FakeTranscriptionProvider()
         val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
@@ -79,8 +78,6 @@ class RuntimeVoiceWiringTest {
             model = { "whisper-large-v3-turbo" },
             languageHint = { null },
         )
-        val event = async { provider.events.first() }
-        runCurrent()
         provider.startListening(
             com.dustincorder.rai.domain.RecognitionRequest(
                 com.dustincorder.rai.domain.ConversationLanguage.Auto,
@@ -89,14 +86,14 @@ class RuntimeVoiceWiringTest {
             com.dustincorder.rai.domain.BargeInHandoff(byteArrayOf(1, 2, 3, 4), 16_000),
         )
 
-        assertEquals(SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"), event.await())
+        assertEquals(SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"), provider.events.first())
         assertEquals(byteArrayOf(1, 2, 3, 4).toList(), capture.initialPcm.toList())
         provider.release()
         providerScope.cancel()
     }
 
     @Test
-    fun `runtime selector uses system provider when settings select system`() = runTest {
+    fun `runtime selector uses system provider when settings select system`() = runBlocking {
         val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.System))
         val system = FakeRecognitionProvider(SpeechRecognitionEvent.Final("system", "en-US"))
         val groq = FakeRecognitionProvider(SpeechRecognitionEvent.Final("groq", "en-US"))
@@ -121,7 +118,7 @@ class RuntimeVoiceWiringTest {
     }
 
     @Test
-    fun `runtime selector uses groq when key exists`() = runTest {
+    fun `runtime selector uses groq when key exists`() = runBlocking {
         val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.GroqWhisper))
         val groq = FakeRecognitionProvider(SpeechRecognitionEvent.Final("groq", "ru-RU"))
         val system = FakeRecognitionProvider(SpeechRecognitionEvent.Final("system", "ru-RU"))
@@ -146,7 +143,7 @@ class RuntimeVoiceWiringTest {
     }
 
     @Test
-    fun `cancel stops whisper capture before transcription`() = runTest {
+    fun `cancel stops whisper capture before transcription`() = runBlocking {
         val capture = BlockingAudioCapture()
         val transcription = FakeTranscriptionProvider()
         val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
@@ -171,7 +168,7 @@ class RuntimeVoiceWiringTest {
     }
 
     @Test
-    fun `installed local neural engine is invoked`() = runTest {
+    fun `installed local neural engine is invoked`() = runBlocking {
         val engine = FakeLocalEngine()
         val local = LocalNeuralSpeechSynthesisProvider(FakePackStore(), engine)
         local.speak("Встреча в 12:30", Locale("ru", "RU"))
@@ -181,7 +178,7 @@ class RuntimeVoiceWiringTest {
     }
 
     @Test
-    fun `local unavailable falls back to system and exposes fallback`() = runTest {
+    fun `local unavailable falls back to system and exposes fallback`() = runBlocking {
         val system = FakeSynthesisProvider()
         val local = LocalNeuralSpeechSynthesisProvider(FakePackStore(), null)
         val fallback = RuntimeSpeechSynthesisProvider(

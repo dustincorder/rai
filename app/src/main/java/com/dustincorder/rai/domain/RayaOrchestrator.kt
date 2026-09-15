@@ -123,7 +123,8 @@ class RayaOrchestrator(
                     if (textTurnInFlight) {
                         _streamingText.value = ""
                         _state.value = RayaState.Error(
-                            failure.message ?: "Не удалось получить ответ.",
+                            failure.message.orEmpty(),
+                            RayaErrorCode.ReplyUnavailable,
                         )
                     }
                 }
@@ -366,7 +367,7 @@ class RayaOrchestrator(
             collector.cancel()
             record("voice.startListeningFailure epoch=$epoch class=${failure::class.java.simpleName}")
             if (isStaleEpoch(epoch, "startListening")) return
-            failVoiceSession("Сбой инициализации распознавания речи.")
+            failVoiceSession(code = RayaErrorCode.RecognitionStartFailed)
             return
         }
         try {
@@ -388,7 +389,7 @@ class RayaOrchestrator(
                         _state.value = RayaState.Idle
                     }
                 }
-                else -> failVoiceSession(failure.message ?: "Сбой распознавания речи.")
+                else -> failVoiceSession(failure.message.orEmpty(), RayaErrorCode.RecognitionFailed)
             }
         }
     }
@@ -437,7 +438,7 @@ class RayaOrchestrator(
             throw cancellation
         } catch (failure: Throwable) {
             if (isStaleEpoch(epoch, "reply")) return
-            failVoiceSession(failure.message ?: "Голосовой pipeline завершился с ошибкой.")
+            failVoiceSession(failure.message.orEmpty(), RayaErrorCode.VoicePipelineFailed)
             return
         }
 
@@ -479,7 +480,7 @@ class RayaOrchestrator(
             return
         }
         speakFailure?.let { failure ->
-            failVoiceSession(failure.message ?: "Голосовой pipeline завершился с ошибкой.")
+            failVoiceSession(failure.message.orEmpty(), RayaErrorCode.VoicePipelineFailed)
             return
         }
 
@@ -539,15 +540,15 @@ class RayaOrchestrator(
         }
         if (notice) {
             _conversation.value = appendMessage(
-                ConversationMessage(ConversationRole.Notice, "Голосовой чат завершён из-за неактивности."),
+                ConversationMessage(ConversationRole.Notice, noticeCode = RayaNoticeCode.InactivityEnded),
             )
         }
     }
 
-    private fun failVoiceSession(message: String) {
+    private fun failVoiceSession(message: String = "", code: RayaErrorCode? = null) {
         record("voice.fatalSessionFailure error=$message")
         endVoiceSessionInternal(notice = false, reason = "fatal($message)")
-        _state.value = RayaState.Error(message)
+        _state.value = RayaState.Error(message, code)
     }
 
     private fun appendMessage(message: ConversationMessage): List<ConversationMessage> =
@@ -564,6 +565,5 @@ class RayaOrchestrator(
         const val USER_INACTIVITY_TIMEOUT_MS = 3 * 60 * 1000L
         const val INTERRUPT_TTS_STOP_DELAY_MS = 300L
         const val INACTIVITY_CHECK_INTERVAL_MS = 1_000L
-        const val INACTIVITY_NOTICE_MESSAGE = "Голосовой чат завершён из-за неактивности."
     }
 }

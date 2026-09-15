@@ -122,6 +122,7 @@ fun rayaUiStateFor(
         statusResId = R.string.status_error,
         conversation = conversation,
         errorMessage = state.message,
+        errorCode = state.code,
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
