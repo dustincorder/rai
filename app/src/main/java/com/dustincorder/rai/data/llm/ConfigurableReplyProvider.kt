@@ -21,6 +21,7 @@ class ConfigurableReplyProvider(
     private val apiKeyStore: ApiKeyStore,
     private val openAi: OpenAiCompatibleReplyProvider,
     private val anthropic: AnthropicCompatibleReplyProvider,
+    private val gemini: GeminiReplyProvider,
     private val systemPrompt: () -> String,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : ReplyProvider {
@@ -31,7 +32,8 @@ class ConfigurableReplyProvider(
         return try {
             requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
             val apiKey = apiKeyStore.read(settings.provider)
-            if (settings.modelId.isBlank() || settings.baseUrl.isBlank()) {
+            val modelId = settings.resolvedModelId()
+            if (modelId.isBlank() || settings.baseUrl.isBlank()) {
                 throw LlmConfigurationException("Настрой LLM-провайдера.")
             }
             if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
@@ -42,8 +44,9 @@ class ConfigurableReplyProvider(
                 if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
             }
             val raw = when (settings.protocol) {
-                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
-                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
+                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, modelId, apiKey, prompt, messages)
+                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, modelId, apiKey, prompt, messages)
+                LlmProtocol.Gemini -> gemini.reply(settings.baseUrl, modelId, apiKey, prompt, messages)
             }
             parseRayaResponse(raw, json)
         } catch (cancellation: CancellationException) {
@@ -69,6 +72,7 @@ class ConfigurableReplyProvider(
             when (config.protocol) {
                 LlmProtocol.OpenAiCompatible -> openAi.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
                 LlmProtocol.AnthropicCompatible -> anthropic.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
+                LlmProtocol.Gemini -> gemini.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
             }
             LlmConnectionResult.Success
         } catch (cancellation: CancellationException) {

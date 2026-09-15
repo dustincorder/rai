@@ -55,6 +55,7 @@ class ConfigurableReplyProviderTest {
             keyStore,
             OpenAiCompatibleReplyProvider(client, json),
             AnthropicCompatibleReplyProvider(client, json),
+            GeminiReplyProvider(client, json),
             { "System" },
         )
     }
@@ -356,10 +357,16 @@ private class FakeSettingsRepository(initial: AppSettings) : SettingsRepository 
     private val state = MutableStateFlow(initial)
     override val settings: Flow<AppSettings> = state
     var saveCount = 0
+    private val cache = MutableStateFlow(emptyMap<String, List<String>>())
+    override val modelCache: Flow<Map<String, List<String>>> = cache
 
     override suspend fun save(settings: AppSettings) {
         saveCount++
         state.value = settings
+    }
+
+    override suspend fun saveModelCache(providerName: String, modelIds: List<String>) {
+        cache.value = cache.value + (providerName to modelIds)
     }
 
     override suspend fun currentLanguage(): ConversationLanguage = state.value.conversationLanguage

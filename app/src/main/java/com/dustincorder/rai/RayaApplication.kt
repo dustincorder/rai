@@ -3,6 +3,8 @@ package com.dustincorder.rai
 import android.app.Application
 import com.dustincorder.rai.data.llm.AnthropicCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.ConfigurableReplyProvider
+import com.dustincorder.rai.data.llm.DefaultLlmModelDiscovery
+import com.dustincorder.rai.data.llm.GeminiReplyProvider
 import com.dustincorder.rai.data.llm.OpenAiCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.rayaSystemPrompt
 import com.dustincorder.rai.data.secrets.AndroidApiKeyStore
@@ -31,7 +33,15 @@ class RayaApplication : Application() {
             apiKeyStore = apiKeyStore,
             openAi = OpenAiCompatibleReplyProvider(httpClient, json),
             anthropic = AnthropicCompatibleReplyProvider(httpClient, json),
+            gemini = GeminiReplyProvider(httpClient, json),
             systemPrompt = ::rayaSystemPrompt,
+        )
+    }
+    val modelDiscovery by lazy {
+        DefaultLlmModelDiscovery(
+            client = httpClient,
+            json = json,
+            gemini = GeminiReplyProvider(httpClient, json),
         )
     }
 }
