@@ -105,6 +105,14 @@ class RayaStateMapperTest {
     }
 
     @Test
+    fun `embarrassed expression keeps baseline centered gaze`() {
+        val embarrassed = rayaUiStateFor(RayaState.Idle, semanticEmotion = RayaEmotion.Embarrassed)
+
+        assertEquals(RayaFaceEmotion.Embarrassed, embarrassed.face.emotion)
+        assertEquals(RayaGaze.Center, embarrassed.face.gaze)
+    }
+
+    @Test
     fun `each semantic emotion maps to the expected face`() {
         val mapping = mapOf(
             RayaEmotion.Calm to RayaFaceEmotion.Calm,
