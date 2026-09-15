@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -56,10 +57,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +81,7 @@ import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
 import com.dustincorder.rai.ui.theme.RayaTheme
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.collect
 
 private val FACE_SCRIM_HEIGHT_DP = 60.dp
 private val EMPTY_CONVERSATION_TOP_PADDING_DP = 360.dp
@@ -346,7 +349,7 @@ private fun VoiceControls(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (state.face.emotion == RayaFaceEmotion.Speaking) {
+                if (state.isSpeaking) {
                     IconButton(onClick = onInterruptSpeech) {
                         Icon(Icons.Outlined.Stop, contentDescription = "Остановить речь")
                     }
@@ -384,22 +387,47 @@ private fun ConversationArea(
     val showTransient = listening && state.userText.isNotBlank() &&
         messages.lastOrNull()?.text != state.userText
     val thinking = state.face.emotion == RayaFaceEmotion.Thinking
-    val nearBottom by remember {
-        derivedStateOf {
-            val layout = listState.layoutInfo
-            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible >= layout.totalItemsCount - 2
-        }
-    }
 
     val items: List<Any> = buildList {
         messages.forEach { add(it) }
         if (showTransient) add(TransientSpeech(state.userText))
         if (thinking) add(ThinkingIndicator)
     }
+    var tailPolicy by remember { mutableStateOf(ConversationTailPolicyState()) }
+    val currentItemCount = rememberUpdatedState(items.size)
 
-    LaunchedEffect(items.size) {
-        if (items.isNotEmpty() && nearBottom) {
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val total = layout.totalItemsCount
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+            total to (total == 0 || lastVisible >= total - 2)
+        }.collect { (total, atBottom) ->
+            tailPolicy = tailPolicy.onViewportSample(total, currentItemCount.value, atBottom)
+        }
+    }
+
+    LaunchedEffect(listState.interactionSource) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) {
+                tailPolicy = tailPolicy.onManualScroll()
+            }
+        }
+    }
+
+    LaunchedEffect(state.userTurnRevision) {
+        val nextPolicy = tailPolicy.onUserTurnRevision(state.userTurnRevision)
+        val newIntent = nextPolicy.handledUserTurnRevision != tailPolicy.handledUserTurnRevision
+        tailPolicy = nextPolicy
+        if (newIntent && items.isNotEmpty()) {
+            androidx.compose.runtime.withFrameNanos { }
+            listState.animateScrollToItem(items.lastIndex)
+        }
+    }
+
+    LaunchedEffect(items) {
+        if (items.isNotEmpty() && tailPolicy.followTail) {
+            androidx.compose.runtime.withFrameNanos { }
             listState.animateScrollToItem(items.lastIndex)
         }
     }

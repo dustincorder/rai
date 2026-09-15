@@ -6,8 +6,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.RayaApplication
+import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaOrchestrator
 import com.dustincorder.rai.domain.RayaRoutingDiagnostics
+import com.dustincorder.rai.domain.RayaState
 import com.dustincorder.rai.domain.RayaVoiceDiagnostics
 import com.dustincorder.rai.domain.ReplyProvider
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
@@ -40,7 +43,11 @@ class RayaViewModel(
             orchestrator.state,
             orchestrator.userText,
             orchestrator.conversation,
-        ) { state, userText, conversation -> Triple(state, userText, conversation) },
+            orchestrator.semanticEmotion,
+            orchestrator.userTurnRevision,
+        ) { state, userText, conversation, semanticEmotion, userTurnRevision ->
+            RayaUiFlux(state, userText, conversation, semanticEmotion, userTurnRevision)
+        },
         combine(
             orchestrator.interactionMode,
             orchestrator.voiceSessionActive,
@@ -50,14 +57,24 @@ class RayaViewModel(
         },
     ) { chat, session ->
         rayaUiStateFor(
-            state = chat.first,
-            recognizedText = chat.second,
-            conversation = chat.third,
+            state = chat.state,
+            recognizedText = chat.userText,
+            conversation = chat.conversation,
             interactionMode = session.first,
             voiceSessionActive = session.second,
             microphoneEnabled = session.third,
+            semanticEmotion = chat.semanticEmotion,
+            userTurnRevision = chat.userTurnRevision,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RayaUiState())
+
+    private data class RayaUiFlux(
+        val state: RayaState,
+        val userText: String,
+        val conversation: List<ConversationMessage>,
+        val semanticEmotion: RayaEmotion,
+        val userTurnRevision: Long,
+    )
 
     fun submitText(text: String) = orchestrator.submitText(text)
     fun startVoiceSession() = orchestrator.startVoiceSession()

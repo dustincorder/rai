@@ -63,6 +63,15 @@ class RayaOrchestrator(
     private val _microphoneEnabled = MutableStateFlow(true)
     val microphoneEnabled: StateFlow<Boolean> = _microphoneEnabled.asStateFlow()
 
+    private val _semanticEmotion = MutableStateFlow(RayaEmotion.Calm)
+    val semanticEmotion: StateFlow<RayaEmotion> = _semanticEmotion.asStateFlow()
+
+    private val _lastResponseLanguageTag = MutableStateFlow<String?>(null)
+    val lastResponseLanguageTag: StateFlow<String?> = _lastResponseLanguageTag.asStateFlow()
+
+    private val _userTurnRevision = MutableStateFlow(0L)
+    val userTurnRevision: StateFlow<Long> = _userTurnRevision.asStateFlow()
+
     private var sessionJob: Job? = null
     private var activeTurnJob: Job? = null
     private var turnEpoch = 0
@@ -87,6 +96,7 @@ class RayaOrchestrator(
         if (_voiceSessionActive.value) return
         if (textTurnInFlight) return
         val languageTag: String? = null
+        markUserTurnIntent()
         textTurnInFlight = true
         scope.launch {
             try {
@@ -96,7 +106,9 @@ class RayaOrchestrator(
                     val response = replyProvider.reply(conversationContext(), languageTag)
                     if (_voiceSessionActive.value) return@launch
                     if (!textTurnInFlight) return@launch
-                    _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response))
+                    _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
+                    _semanticEmotion.value = response.emotion
+                    _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
                     _state.value = RayaState.Idle
                 } catch (cancellation: CancellationException) {
                     throw cancellation
@@ -122,13 +134,15 @@ class RayaOrchestrator(
         _voiceSessionActive.value = true
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Voice
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
         sessionJob = SupervisorJob(scope.coroutineContext[Job] ?: Job())
         record(
             "voice.startSession turnEpoch=$turnEpoch voiceSessionActive=${_voiceSessionActive.value} " +
                 "microphoneEnabled=${_microphoneEnabled.value} state=${stateName()}",
         )
         launchInactivityMonitor()
-        beginVoiceTurn(resetActivity = true)
+        beginVoiceTurn(resetActivity = true, explicitIntent = true)
     }
 
     fun endVoiceSession() = endVoiceSessionInternal(notice = false, reason = "user")
@@ -147,8 +161,7 @@ class RayaOrchestrator(
         if (enable) {
             when {
                 _state.value == RayaState.Listening ||
-                    _state.value is RayaState.Speaking ||
-                    _state.value == RayaState.Idle -> beginVoiceTurn(resetActivity = true)
+                    _state.value == RayaState.Idle -> beginVoiceTurn(resetActivity = true, explicitIntent = true)
             }
         } else {
             if (_state.value == RayaState.Listening) {
@@ -200,6 +213,8 @@ class RayaOrchestrator(
         if (_voiceSessionActive.value) return
         if (textTurnInFlight) return
         _conversation.value = emptyList()
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
     }
 
     fun close() {
@@ -208,9 +223,10 @@ class RayaOrchestrator(
         speechSynthesis.shutdown()
     }
 
-    private fun beginVoiceTurn(resetActivity: Boolean) {
+    private fun beginVoiceTurn(resetActivity: Boolean, explicitIntent: Boolean = false) {
         if (sessionJob?.isActive != true) return
         val parent = sessionJob ?: return
+        if (explicitIntent) markUserTurnIntent()
         val epoch = ++turnEpoch
         if (resetActivity) {
             lastUserActivityAt = now()
@@ -320,6 +336,7 @@ class RayaOrchestrator(
         val queryBlank = addressing.query.isBlank()
         val localResponse = addressing.addressed && queryBlank
         routingDiagnostics.record(addressing.addressed, queryBlank, localResponse)
+        markUserTurnIntent()
 
         _state.value = RayaState.Thinking
         _conversation.value = appendMessage(
@@ -345,11 +362,20 @@ class RayaOrchestrator(
         }
 
         if (isStaleEpoch(epoch, "highlight")) return
-        _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response))
-        _state.value = RayaState.Speaking(response)
+        _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
+        _semanticEmotion.value = response.emotion
+        _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
+        _state.value = RayaState.Speaking(response.text)
 
+        val ttsLanguageTag = response.languageTag
+            ?.takeIf { it.isValidLanguageTag() }
+            ?: resolvedLanguageTag
+        record(
+            "voice.speak epoch=$epoch responseLanguageTag=${response.languageTag ?: "null"} " +
+                "ttsLanguageTag=$ttsLanguageTag emotion=${response.emotion}",
+        )
         val outcome = runCatching {
-            speechSynthesis.speak(response, Locale.forLanguageTag(resolvedLanguageTag))
+            speechSynthesis.speak(response.text, Locale.forLanguageTag(ttsLanguageTag))
         }
         if (isStaleEpoch(epoch, "speak")) return
         currentCoroutineContext().ensureActive()
@@ -368,6 +394,10 @@ class RayaOrchestrator(
             return
         }
         beginVoiceTurn(resetActivity = true)
+    }
+
+    private fun markUserTurnIntent() {
+        _userTurnRevision.value += 1
     }
 
     private fun launchInactivityMonitor() {
@@ -400,6 +430,8 @@ class RayaOrchestrator(
         _voiceSessionActive.value = false
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Text
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
         _state.value = RayaState.Idle
         if (wasActive) {
             record(

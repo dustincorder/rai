@@ -32,11 +32,12 @@ interface SpeechSynthesisProvider {
 }
 
 interface ReplyProvider {
-    suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String
+    suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse
 }
 
 class MockReplyProvider : ReplyProvider {
-    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String = "Я тебя слышу."
+    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse =
+        RayaResponse(text = "Я тебя слышу.", emotion = RayaEmotion.Calm, languageTag = null)
 }
 
 interface ConversationLanguageProvider {

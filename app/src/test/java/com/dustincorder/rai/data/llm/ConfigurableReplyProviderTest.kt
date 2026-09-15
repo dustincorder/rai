@@ -9,6 +9,8 @@ import com.dustincorder.rai.data.settings.SettingsRepository
 import com.dustincorder.rai.domain.ConversationLanguage
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import com.dustincorder.rai.domain.RayaEmotion
+import com.dustincorder.rai.domain.RayaResponse
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -71,12 +73,12 @@ class ConfigurableReplyProviderTest {
     fun `provider switching applies to next request`() = runTest {
         repository.save(custom(LlmProtocol.OpenAiCompatible))
         server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"one"}}]}"""))
-        assertEquals("one", provider.reply(userMsg("hello"), "en-US"))
+        assertEquals("one", provider.reply(userMsg("hello"), "en-US").text)
         assertEquals("/v1/chat/completions", server.takeRequest().path)
 
         repository.save(custom(LlmProtocol.AnthropicCompatible))
         server.enqueue(MockResponse().setBody("""{"content":[{"type":"text","text":"two"}]}"""))
-        assertEquals("two", provider.reply(userMsg("hello"), "en-US"))
+        assertEquals("two", provider.reply(userMsg("hello"), "en-US").text)
         assertEquals("/v1/messages", server.takeRequest().path)
     }
 
@@ -302,7 +304,7 @@ class ConfigurableReplyProviderTest {
             "en-US",
         )
 
-        assertEquals("D", reply)
+        assertEquals("D", reply.text)
         val body = server.takeRequest().body.readUtf8()
         val messages = body.substringAfter("\"messages\":[")
         assertEquals(1, Regex("""\{"role":"system"""").findAll(messages).count())
@@ -311,6 +313,34 @@ class ConfigurableReplyProviderTest {
         val userC = messages.indexOf("\"role\":\"user\",\"content\":\"C\"")
         assertTrue(userA in 0 until assistantB)
         assertTrue(assistantB in 0 until userC)
+    }
+
+    @Test
+    fun `valid OpenAI structured response parses to the domain model`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                """{"choices":[{"message":{"role":"assistant","content":"{\"text\":\"Привет из OpenAI!\",\"emotion\":\"curious\",\"language\":\"en-US\"}"}}]}""",
+            ),
+        )
+        val response = provider.reply(userMsg("hello"), "en-US")
+
+        assertEquals(RayaResponse("Привет из OpenAI!", RayaEmotion.Curious, "en-US"), response)
+    }
+
+    @Test
+    fun `valid Anthropic structured response parses to the domain model`() = runTest {
+        repository.save(custom(LlmProtocol.AnthropicCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                """{"content":[{"type":"text","text":"{\"text\":\"Привет из Anthropic!\",\"emotion\":\"surprised\",\"language\":\"ru-RU\"}"}]}""",
+            ),
+        )
+        val response = provider.reply(userMsg("hello"), "en-US")
+
+        assertEquals(RayaResponse("Привет из Anthropic!", RayaEmotion.Surprised, "ru-RU"), response)
     }
 
     private fun custom(protocol: LlmProtocol) = AppSettings(

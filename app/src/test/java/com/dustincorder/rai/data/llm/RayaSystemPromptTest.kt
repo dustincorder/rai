@@ -1,5 +1,6 @@
 package com.dustincorder.rai.data.llm
 
+import com.dustincorder.rai.domain.RayaEmotion
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,5 +18,81 @@ class RayaSystemPromptTest {
     @Test
     fun `built in system prompt does not overreach device actions`() {
         assertTrue(rayaSystemPrompt().contains("Не утверждай"))
+    }
+
+    @Test
+    fun `built in system prompt demands structured json output`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue("prompt must ask for a json object", prompt.contains("\"text\""))
+        assertTrue("prompt must list the emotion field", prompt.contains("\"emotion\""))
+        assertTrue("prompt must list the language field", prompt.contains("\"language\""))
+        assertTrue("prompt must enumerate the supported emotion values", prompt.contains("calm"))
+        assertTrue("prompt must enumerate the supported emotion values", prompt.contains("surprised"))
+    }
+
+    @Test
+    fun `built in system prompt lists every supported semantic emotion`() {
+        val prompt = rayaSystemPrompt()
+
+        RayaEmotion.entries.forEach { emotion ->
+            assertTrue(
+                "prompt must list ${emotion.name}",
+                prompt.contains(emotion.name.lowercase()),
+            )
+        }
+    }
+
+    @Test
+    fun `core prompt mentions the real face capability`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue("prompt must say the app has a visual face", prompt.contains("визуальное лицо"))
+        assertTrue("prompt must say the face supports emotions", prompt.contains("эмоци"))
+    }
+
+    @Test
+    fun `core prompt forbids claiming unimplemented capabilities`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue("web search is not implemented and must be called out", prompt.contains("поиск в интернете"))
+        assertTrue("weather is not implemented and must be called out", prompt.contains("погод"))
+        assertTrue("reminders are not implemented and must be called out", prompt.contains("напоминани"))
+        assertTrue("device actions are not implemented and must be called out", prompt.contains("управление приложениями"))
+        assertTrue("prompt must state unimplemented capabilities explicitly", prompt.contains("НЕ реализованы"))
+        assertTrue("future-only claims allowed explicitly", prompt.contains("будущих"))
+    }
+
+    @Test
+    fun `core prompt must not tell the user the face cannot change`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue(
+            "prompt must forbid the helpless-digital-assistant wording about the face",
+            prompt.contains("не можешь менять лицо"),
+        )
+    }
+
+    @Test
+    fun `core prompt forbids fake voice control claims`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue(prompt.contains("голос TTS"))
+        assertTrue(prompt.contains("тембр"))
+        assertTrue(prompt.contains("высоту"))
+        assertTrue(prompt.contains("акцент"))
+        assertTrue(prompt.contains("движок произношения"))
+        assertTrue(prompt.contains("стиль речи"))
+        assertTrue(prompt.contains("интонацию/просодию"))
+        assertTrue(prompt.contains("скорость речи"))
+    }
+
+    @Test
+    fun `core prompt forbids spoken barge in claims`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue(prompt.contains("не слышишь пользователя, пока сама говоришь"))
+        assertTrue(prompt.contains("true spoken barge-in"))
+        assertTrue(prompt.contains("одновременное слушание не реализованы"))
     }
 }

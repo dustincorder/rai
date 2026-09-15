@@ -1,0 +1,32 @@
+package com.dustincorder.rai.domain
+
+enum class RayaEmotion {
+    Calm,
+    Happy,
+    Excited,
+    Playful,
+    Curious,
+    Thinking,
+    Skeptical,
+    Confused,
+    Concerned,
+    Sad,
+    Embarrassed,
+    Surprised,
+    Angry,
+    Annoyed,
+    Tired,
+}
+
+/**
+ * Structured domain response produced by an LLM transport.
+ *
+ * [text] is the only part persisted into the conversation history. [emotion] drives
+ * the face expression of the app, [languageTag] (validated BCP-47) drives the voice
+ * TTS locale and is kept for future UI/debug purposes.
+ */
+data class RayaResponse(
+    val text: String,
+    val emotion: RayaEmotion = RayaEmotion.Calm,
+    val languageTag: String? = null,
+)

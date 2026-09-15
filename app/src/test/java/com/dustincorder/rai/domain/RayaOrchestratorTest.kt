@@ -283,6 +283,82 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `speaking remains speaking when microphone is toggled off`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("B"), orchestrator.state.value)
+        assertFalse(orchestrator.microphoneEnabled.value)
+        assertTrue(synthesis.speakCount == 1)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `speaking remains speaking when microphone is toggled on`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("B"), orchestrator.state.value)
+        assertTrue(orchestrator.microphoneEnabled.value)
+        assertEquals(1, synthesis.speakCount)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `speaking mic toggles then stop stops tts without starting recognition`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        orchestrator.interruptSpeech()
+        advanceTimeBy(RayaOrchestrator.INTERRUPT_TTS_STOP_DELAY_MS)
+        runCurrent()
+
+        assertTrue(synthesis.stopCount >= 1)
+        assertFalse(orchestrator.state.value is RayaState.Error)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
     fun `E endVoiceSession cancels recognition and preserves history`() = runTest {
         val recognition = FakeRecognitionProvider()
         val synthesis = FakeSynthesisProvider()
@@ -1199,6 +1275,225 @@ class RayaOrchestratorTest {
         runCurrent()
         assertEquals("no restart loop", 1, recognition.startCount)
     }
+
+    @Test
+    fun `voice TTS uses response language tag over the resolved stt language`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("How are you?", "en-US"))
+        runCurrent()
+        reply.complete(RayaResponse("I am fine!", RayaEmotion.Happy, "en-US"))
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("I am fine!"), orchestrator.state.value)
+        assertEquals("en-US", synthesis.lastLocale?.toLanguageTag())
+        assertEquals(RayaEmotion.Happy, orchestrator.semanticEmotion.value)
+        assertEquals("en-US", orchestrator.lastResponseLanguageTag.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `voice TTS falls back to resolved stt language on invalid response language tag`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(
+            scope = this,
+            speechRecognition = recognition,
+            speechSynthesis = synthesis,
+            replyProvider = reply,
+            systemLanguageTag = { "ru-RU" },
+        )
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Привет", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Привет!", RayaEmotion.Calm, "12345"))
+        runCurrent()
+
+        assertEquals("ru-RU", synthesis.lastLocale?.toLanguageTag())
+        assertEquals(null, orchestrator.lastResponseLanguageTag.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `voice history stores only response text and applies semantic emotion`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B", "D"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Вопрос", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Первый ответ", RayaEmotion.Surprised, "ru-RU"))
+        runCurrent()
+        synthesis.complete()
+        runCurrent()
+
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertEquals(
+            listOf(
+                ConversationMessage(ConversationRole.Assistant, "Первый ответ"),
+            ),
+            orchestrator.conversation.value.filter { it.role == ConversationRole.Assistant },
+        )
+        assertEquals(RayaEmotion.Surprised, orchestrator.semanticEmotion.value)
+        assertEquals("ru-RU", orchestrator.lastResponseLanguageTag.value)
+
+        recognition.emit(SpeechRecognitionEvent.Final("Второй вопрос", "ru-RU"))
+        runCurrent()
+        assertEquals("listening keeps the previous emotion until the next reply", RayaEmotion.Surprised, orchestrator.semanticEmotion.value)
+        reply.complete(RayaResponse("Второй ответ", RayaEmotion.Calm, "ru-RU"))
+        runCurrent()
+        assertEquals(RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `text mode never speaks and updates semantic emotion for future ui`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.submitText("Как дела?")
+        runCurrent()
+        reply.complete(RayaResponse("Отлично!", RayaEmotion.Happy, "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertEquals(0, synthesis.speakCount)
+        assertEquals(RayaEmotion.Happy, orchestrator.semanticEmotion.value)
+        assertEquals("ru-RU", orchestrator.lastResponseLanguageTag.value)
+        assertEquals(
+            listOf(
+                ConversationMessage(ConversationRole.User, "Как дела?"),
+                ConversationMessage(ConversationRole.Assistant, "Отлично!"),
+            ),
+            orchestrator.conversation.value,
+        )
+    }
+
+    @Test
+    fun `fresh voice session and clear reset the semantic emotion to calm`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.submitText("Вопрос")
+        runCurrent()
+        reply.complete(RayaResponse("Ответ", RayaEmotion.Angry, "en-US"))
+        runCurrent()
+        assertEquals(RayaEmotion.Angry, orchestrator.semanticEmotion.value)
+
+        orchestrator.clearConversation()
+        assertEquals(RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        assertEquals(null, orchestrator.lastResponseLanguageTag.value)
+
+        orchestrator.submitText("Ещё вопрос")
+        runCurrent()
+        reply.complete(RayaResponse("Ещё ответ", RayaEmotion.Concerned, "en-US"))
+        runCurrent()
+        assertEquals(RayaEmotion.Concerned, orchestrator.semanticEmotion.value)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        assertEquals("fresh session starts calm", RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `ending voice session resets semantic emotion without clearing history`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Я устала.", RayaEmotion.Tired, "ru-RU"))
+        runCurrent()
+        assertEquals(RayaEmotion.Tired, orchestrator.semanticEmotion.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertEquals(RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        assertEquals(null, orchestrator.lastResponseLanguageTag.value)
+        assertTrue(orchestrator.conversation.value.any { it.text == "Я устала." })
+    }
+
+    @Test
+    fun `inactivity voice session end resets semantic emotion`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(
+            scope = this,
+            speechRecognition = recognition,
+            speechSynthesis = synthesis,
+            replyProvider = reply,
+            now = { testScheduler.currentTime },
+            inactivityTimeoutMs = { 3_000L },
+        )
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Я устала.", RayaEmotion.Tired, "ru-RU"))
+        runCurrent()
+        synthesis.complete()
+        runCurrent()
+        assertEquals(RayaEmotion.Tired, orchestrator.semanticEmotion.value)
+
+        advanceTimeBy(4_000L)
+        runCurrent()
+
+        assertFalse(orchestrator.voiceSessionActive.value)
+        assertEquals(RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        assertEquals(null, orchestrator.lastResponseLanguageTag.value)
+    }
+
+    @Test
+    fun `speaking to listening within active session preserves semantic emotion`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Я устала.", RayaEmotion.Tired, "ru-RU"))
+        runCurrent()
+        synthesis.complete()
+        runCurrent()
+
+        assertTrue(orchestrator.voiceSessionActive.value)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertEquals(RayaEmotion.Tired, orchestrator.semanticEmotion.value)
+        assertEquals("ru-RU", orchestrator.lastResponseLanguageTag.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
 }
 
 private class FakeRecognitionProvider : SpeechRecognitionProvider {
@@ -1318,23 +1613,23 @@ private class FakeSynthesisProvider(
 private class FakeReplyProvider(
     private val waitForReply: Boolean = false,
     private val fail: Boolean = false,
-    private val responses: MutableList<String> = mutableListOf("Я тебя слышу."),
+    responses: MutableList<String> = mutableListOf("Я тебя слышу."),
 ) : ReplyProvider {
-    private val pending = Channel<String>(Channel.UNLIMITED)
+    private val responseQueue = ArrayDeque(responses.map { RayaResponse(it, RayaEmotion.Calm, null) })
+    private val pending = Channel<RayaResponse>(Channel.UNLIMITED)
     var callCount = 0
     var lastMessages: List<ConversationMessage>? = null
     var lastLanguageTag: String? = null
 
-    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String {
+    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse {
         callCount++
         lastMessages = messages
         lastLanguageTag = languageTag
         if (fail) throw RuntimeException("LLM failure")
-        if (waitForReply) return pending.receive()
-        return responses.removeFirst()
+        return if (waitForReply) pending.receive() else responseQueue.removeFirst()
     }
 
-    fun complete() {
-        pending.trySend(responses.removeFirst())
+    fun complete(structured: RayaResponse? = null) {
+        pending.trySend(structured ?: responseQueue.removeFirst())
     }
 }

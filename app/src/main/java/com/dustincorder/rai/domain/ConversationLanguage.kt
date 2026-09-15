@@ -41,12 +41,16 @@ fun String.isValidLanguageTag(): Boolean {
     return locale.language.isNotBlank() && locale.toLanguageTag() != "und"
 }
 
-fun localNameResponse(resolvedLanguageTag: String?): String = when (resolvedLanguageTag?.primarySubtag()) {
-    "ru" -> "Я здесь."
-    "uk" -> "Я тут."
-    "en" -> "I'm here."
-    else -> "Я здесь."
-}
+fun localNameResponse(resolvedLanguageTag: String?): RayaResponse = RayaResponse(
+    text = when (resolvedLanguageTag?.primarySubtag()) {
+        "ru" -> "Я здесь."
+        "uk" -> "Я тут."
+        "en" -> "I'm here."
+        else -> "Я здесь."
+    },
+    emotion = RayaEmotion.Calm,
+    languageTag = null,
+)
 
 private fun String.primarySubtag(): String? =
     substringBefore('-').takeIf { it.isNotBlank() }?.lowercase()
