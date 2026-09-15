@@ -72,4 +72,27 @@ class RayaSystemPromptTest {
             prompt.contains("не можешь менять лицо"),
         )
     }
+
+    @Test
+    fun `core prompt forbids fake voice control claims`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue(prompt.contains("голос TTS"))
+        assertTrue(prompt.contains("тембр"))
+        assertTrue(prompt.contains("высоту"))
+        assertTrue(prompt.contains("акцент"))
+        assertTrue(prompt.contains("движок произношения"))
+        assertTrue(prompt.contains("стиль речи"))
+        assertTrue(prompt.contains("интонацию/просодию"))
+        assertTrue(prompt.contains("скорость речи"))
+    }
+
+    @Test
+    fun `core prompt forbids spoken barge in claims`() {
+        val prompt = rayaSystemPrompt()
+
+        assertTrue(prompt.contains("не слышишь пользователя, пока сама говоришь"))
+        assertTrue(prompt.contains("true spoken barge-in"))
+        assertTrue(prompt.contains("одновременное слушание не реализованы"))
+    }
 }

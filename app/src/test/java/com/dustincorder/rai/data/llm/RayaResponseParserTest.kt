@@ -68,9 +68,26 @@ class RayaResponseParserTest {
     }
 
     @Test
-    fun `malformed json falls back to the original plain text`() {
-        val raw = """{"text": "не закрыт"""
-        assertEquals(RayaResponse(raw.trim(), RayaEmotion.Calm, null), parseRayaResponse(raw))
+    fun `malformed json object is a provider error`() {
+        assertThrows(LlmSafeException::class.java) {
+            parseRayaResponse("""{"text": "не закрыт""")
+        }
+        assertThrows(LlmSafeException::class.java) {
+            parseRayaResponse("""{"emotion":"happy",""")
+        }
+    }
+
+    @Test
+    fun `malformed fenced json object is a provider error`() {
+        val raw = """
+            ```json
+            {"text":"сломано"
+            ```
+        """.trimIndent()
+
+        assertThrows(LlmSafeException::class.java) {
+            parseRayaResponse(raw)
+        }
     }
 
     @Test

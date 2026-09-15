@@ -24,9 +24,14 @@ private val RAYA_STRUCTURED_JSON = Json { ignoreUnknownKeys = true }
  */
 fun parseRayaResponse(raw: String, json: Json = RAYA_STRUCTURED_JSON): RayaResponse {
     val source = raw.trim()
-    val structured = runCatching {
-        json.decodeFromString<RayaStructured>(stripMarkdownFence(source))
-    }.getOrNull()
+    val candidate = stripMarkdownFence(source)
+    val structured = runCatching { json.decodeFromString<RayaStructured>(candidate) }
+        .getOrElse {
+            if (candidate.startsWith("{")) {
+                throw LlmSafeException("Провайдер вернул некорректный структурированный ответ.")
+            }
+            null
+        }
     val text = structured?.text?.trim().orEmpty()
     if (structured != null && text.isBlank()) {
         throw LlmSafeException("Ответ модели не содержит текста.")
