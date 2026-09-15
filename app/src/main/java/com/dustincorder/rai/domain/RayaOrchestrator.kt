@@ -430,6 +430,8 @@ class RayaOrchestrator(
         _voiceSessionActive.value = false
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Text
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
         _state.value = RayaState.Idle
         if (wasActive) {
             record(

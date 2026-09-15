@@ -1414,6 +1414,86 @@ class RayaOrchestratorTest {
         orchestrator.endVoiceSession()
         runCurrent()
     }
+
+    @Test
+    fun `ending voice session resets semantic emotion without clearing history`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Я устала.", RayaEmotion.Tired, "ru-RU"))
+        runCurrent()
+        assertEquals(RayaEmotion.Tired, orchestrator.semanticEmotion.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertEquals(RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        assertEquals(null, orchestrator.lastResponseLanguageTag.value)
+        assertTrue(orchestrator.conversation.value.any { it.text == "Я устала." })
+    }
+
+    @Test
+    fun `inactivity voice session end resets semantic emotion`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(
+            scope = this,
+            speechRecognition = recognition,
+            speechSynthesis = synthesis,
+            replyProvider = reply,
+            now = { testScheduler.currentTime },
+            inactivityTimeoutMs = { 3_000L },
+        )
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Я устала.", RayaEmotion.Tired, "ru-RU"))
+        runCurrent()
+        synthesis.complete()
+        runCurrent()
+        assertEquals(RayaEmotion.Tired, orchestrator.semanticEmotion.value)
+
+        advanceTimeBy(4_000L)
+        runCurrent()
+
+        assertFalse(orchestrator.voiceSessionActive.value)
+        assertEquals(RayaEmotion.Calm, orchestrator.semanticEmotion.value)
+        assertEquals(null, orchestrator.lastResponseLanguageTag.value)
+    }
+
+    @Test
+    fun `speaking to listening within active session preserves semantic emotion`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete(RayaResponse("Я устала.", RayaEmotion.Tired, "ru-RU"))
+        runCurrent()
+        synthesis.complete()
+        runCurrent()
+
+        assertTrue(orchestrator.voiceSessionActive.value)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertEquals(RayaEmotion.Tired, orchestrator.semanticEmotion.value)
+        assertEquals("ru-RU", orchestrator.lastResponseLanguageTag.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
 }
 
 private class FakeRecognitionProvider : SpeechRecognitionProvider {

@@ -29,9 +29,9 @@ fun RayaEmotion.toFaceEmotion(): RayaFaceEmotion = when (this) {
 
 private val RayaEmotion.semanticGaze: RayaGaze
     get() = when (this) {
-        RayaEmotion.Curious -> RayaGaze.Side
+        RayaEmotion.Curious -> RayaGaze.Alert
         RayaEmotion.Thinking -> RayaGaze.Side
-        RayaEmotion.Skeptical -> RayaGaze.Alert
+        RayaEmotion.Skeptical -> RayaGaze.Side
         RayaEmotion.Confused -> RayaGaze.Center
         RayaEmotion.Concerned -> RayaGaze.Up
         RayaEmotion.Sad,

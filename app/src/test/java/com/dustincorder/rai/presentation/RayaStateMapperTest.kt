@@ -96,6 +96,15 @@ class RayaStateMapperTest {
     }
 
     @Test
+    fun `curious and skeptical use swapped examining gaze concepts`() {
+        val curious = rayaUiStateFor(RayaState.Idle, semanticEmotion = RayaEmotion.Curious)
+        val skeptical = rayaUiStateFor(RayaState.Idle, semanticEmotion = RayaEmotion.Skeptical)
+
+        assertEquals(RayaGaze.Alert, curious.face.gaze)
+        assertEquals(RayaGaze.Side, skeptical.face.gaze)
+    }
+
+    @Test
     fun `each semantic emotion maps to the expected face`() {
         val mapping = mapOf(
             RayaEmotion.Calm to RayaFaceEmotion.Calm,
