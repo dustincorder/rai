@@ -1,6 +1,7 @@
 package com.dustincorder.rai.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,14 +20,18 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,6 +52,9 @@ import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
+import com.dustincorder.rai.data.llm.DiscoveredModel
+import com.dustincorder.rai.data.llm.ModelListState
+import com.dustincorder.rai.data.llm.chatModels
 import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
@@ -60,9 +68,11 @@ fun SettingsScreen(
     val stored by viewModel.settings.collectAsStateWithLifecycle()
     val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
     val apiKeyStatus by viewModel.apiKeyStatus.collectAsStateWithLifecycle()
+    val modelListState by viewModel.modelListState.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf(stored) }
     var apiKey by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
+    var modelMenuExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(stored) { draft = stored }
 
@@ -95,9 +105,10 @@ fun SettingsScreen(
                     Text(stringResource(R.string.llm), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.provider), style = MaterialTheme.typography.labelMedium)
                     ChipGrid(LlmProviderPreset.entries, draft.provider, { it.name }) { provider ->
-                        draft = draft.copy(provider = provider, modelId = provider.defaultModel)
+                        draft = draft.copy(provider = provider, modelId = provider.defaultModel, useCustomModel = false, customModelId = "")
                         apiKey = ""
                         viewModel.refreshApiKeyStatus(provider)
+                        viewModel.refreshModelList(draft, apiKey)
                     }
                     if (draft.provider == LlmProviderPreset.Custom) {
                         Text(stringResource(R.string.protocol), style = MaterialTheme.typography.labelMedium)
@@ -131,13 +142,53 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    OutlinedTextField(
-                        value = draft.modelId,
-                        onValueChange = { draft = draft.copy(modelId = it) },
-                            label = { Text(stringResource(R.string.model_id)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    val discovered = when (val value = modelListState) {
+                        is ModelListState.Loaded -> value.models.chatModels()
+                        is ModelListState.Cached -> value.models.chatModels()
+                        is ModelListState.Failed -> value.cached.chatModels()
+                        ModelListState.Loading -> emptyList()
+                    }
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { modelMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (draft.useCustomModel) stringResource(R.string.custom_model) else draft.modelId)
+                        }
+                        DropdownMenu(
+                            expanded = modelMenuExpanded,
+                            onDismissRequest = { modelMenuExpanded = false },
+                        ) {
+                            discovered.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model.displayName) },
+                                    onClick = {
+                                        draft = draft.copy(modelId = model.id, useCustomModel = false)
+                                        modelMenuExpanded = false
+                                    },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.custom_model)) },
+                                onClick = {
+                                    draft = draft.copy(useCustomModel = true)
+                                    modelMenuExpanded = false
+                                },
+                            )
+                        }
+                    }
+                    if (draft.useCustomModel) {
+                        OutlinedTextField(
+                            value = draft.customModelId,
+                            onValueChange = { draft = draft.copy(customModelId = it) },
+                            label = { Text(stringResource(R.string.custom_model_id)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    TextButton(onClick = { viewModel.refreshModelList(draft, apiKey) }) {
+                        Text(stringResource(R.string.refresh_models))
+                    }
                     val keyPlaceholder = when (apiKeyStatus) {
                         ApiKeyStatus.Configured -> stringResource(R.string.api_key_replace)
                         else -> stringResource(R.string.api_key_enter)
@@ -186,6 +237,25 @@ fun SettingsScreen(
                         )
                         ApiKeyStatus.Unknown -> Unit
                     }
+                }
+            }
+
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.voice_section), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.stt_model), style = MaterialTheme.typography.labelMedium)
+                    OutlinedTextField(
+                        value = draft.sttModelId,
+                        onValueChange = { draft = draft.copy(sttModelId = it) },
+                        label = { Text(stringResource(R.string.stt_model)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        stringResource(R.string.stt_model_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
