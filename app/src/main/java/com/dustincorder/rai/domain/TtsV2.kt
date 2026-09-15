@@ -13,6 +13,10 @@ data class TtsModelPack(
     val languageTags: Set<String>,
     val sha256: String,
     val byteSize: Long,
+    val rootPath: String? = null,
+    val modelPath: String? = null,
+    val tokensPath: String? = null,
+    val dataDir: String? = null,
 )
 
 interface TtsModelPackStore {

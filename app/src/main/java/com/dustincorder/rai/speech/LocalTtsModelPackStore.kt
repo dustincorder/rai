@@ -23,6 +23,10 @@ class AndroidTtsModelPackStore(context: Context) : TtsModelPackStore {
             languageTags = values["languages"].orEmpty().split(',').filter { it.isNotBlank() }.toSet(),
             sha256 = values["sha256"] ?: return null,
             byteSize = values["bytes"]?.toLongOrNull() ?: return null,
+            rootPath = File(root, values["id"] ?: return null).absolutePath,
+            modelPath = values["modelPath"],
+            tokensPath = values["tokensPath"],
+            dataDir = values["dataDir"],
         )
     }
 
@@ -42,6 +46,9 @@ class AndroidTtsModelPackStore(context: Context) : TtsModelPackStore {
                 "languages=${pack.languageTags.joinToString(",")}",
                 "sha256=${pack.sha256}",
                 "bytes=${pack.byteSize}",
+                "modelPath=${pack.modelPath.orEmpty()}",
+                "tokensPath=${pack.tokensPath.orEmpty()}",
+                "dataDir=${pack.dataDir.orEmpty()}",
             ).joinToString("\n"),
         )
     }

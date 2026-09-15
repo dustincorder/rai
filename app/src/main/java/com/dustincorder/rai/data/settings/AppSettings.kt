@@ -1,10 +1,16 @@
 package com.dustincorder.rai.data.settings
 
 import com.dustincorder.rai.domain.ConversationLanguage
+import com.dustincorder.rai.domain.TtsEngine
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 enum class LlmProtocol { OpenAiCompatible, AnthropicCompatible, Gemini }
+
+enum class SttEngine {
+    GroqWhisper,
+    System,
+}
 
 enum class LlmProviderPreset(
     val protocol: LlmProtocol,
@@ -27,6 +33,8 @@ data class AppSettings(
     val useCustomModel: Boolean = false,
     val customModelId: String = "",
     val sttModelId: String = "whisper-large-v3-turbo",
+    val sttEngine: SttEngine = SttEngine.GroqWhisper,
+    val ttsEngine: TtsEngine = TtsEngine.System,
     val conversationLanguage: ConversationLanguage = ConversationLanguage.Auto,
     val customAllowInsecureHttp: Boolean = false,
 ) {

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.dustincorder.rai.domain.ConversationLanguage
 import com.dustincorder.rai.domain.ConversationLanguageProvider
+import com.dustincorder.rai.domain.TtsEngine
 import com.dustincorder.rai.domain.isValidLanguageTag
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -42,6 +43,8 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             useCustomModel = preferences[USE_CUSTOM_MODEL] ?: false,
             customModelId = preferences[CUSTOM_MODEL_ID].orEmpty(),
             sttModelId = preferences[STT_MODEL] ?: "whisper-large-v3-turbo",
+            sttEngine = enumValueOrDefault(preferences[STT_ENGINE], SttEngine.GroqWhisper),
+            ttsEngine = enumValueOrDefault(preferences[TTS_ENGINE], TtsEngine.System),
             conversationLanguage = decodeLanguage(preferences[LANGUAGE] ?: "auto"),
             customAllowInsecureHttp = preferences[ALLOW_INSECURE_HTTP] ?: false,
         )
@@ -85,6 +88,8 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             it[USE_CUSTOM_MODEL] = settings.useCustomModel
             it[CUSTOM_MODEL_ID] = settings.customModelId
             it[STT_MODEL] = settings.sttModelId
+            it[STT_ENGINE] = settings.sttEngine.name
+            it[TTS_ENGINE] = settings.ttsEngine.name
             it[LANGUAGE] = encodeLanguage(settings.conversationLanguage)
             it[ALLOW_INSECURE_HTTP] = settings.customAllowInsecureHttp
         }
@@ -117,6 +122,8 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
         val USE_CUSTOM_MODEL = booleanPreferencesKey("use_custom_model")
         val CUSTOM_MODEL_ID = stringPreferencesKey("custom_model_id")
         val STT_MODEL = stringPreferencesKey("stt_model_id")
+        val STT_ENGINE = stringPreferencesKey("stt_engine")
+        val TTS_ENGINE = stringPreferencesKey("tts_engine")
         val MODEL_CACHE = stringPreferencesKey("model_cache_json")
         val LANGUAGE = stringPreferencesKey("conversation_language")
         val ALLOW_INSECURE_HTTP = booleanPreferencesKey("custom_allow_insecure_http")

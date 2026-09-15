@@ -9,6 +9,21 @@ import com.dustincorder.rai.data.llm.OpenAiCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.rayaSystemPrompt
 import com.dustincorder.rai.data.secrets.AndroidApiKeyStore
 import com.dustincorder.rai.data.settings.DataStoreSettingsRepository
+import com.dustincorder.rai.data.stt.GroqWhisperTranscriptionProvider
+import com.dustincorder.rai.speech.AndroidAudioCapture
+import com.dustincorder.rai.speech.AndroidSpeechRecognitionProvider
+import com.dustincorder.rai.speech.AndroidSpeechSynthesisProvider
+import com.dustincorder.rai.speech.AndroidTtsModelPackStore
+import com.dustincorder.rai.speech.LocalNeuralSpeechSynthesisProvider
+import com.dustincorder.rai.speech.RuntimeSpeechRecognitionProvider
+import com.dustincorder.rai.speech.RuntimeSpeechSynthesisProvider
+import com.dustincorder.rai.speech.SherpaOnnxLocalNeuralTtsEngine
+import com.dustincorder.rai.speech.WhisperSpeechRecognitionProvider
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -43,5 +58,41 @@ class RayaApplication : Application() {
             json = json,
             gemini = GeminiReplyProvider(httpClient, json),
         )
+    }
+
+    private val runtimeScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+
+    fun runtimeSpeechRecognitionProvider() = RuntimeSpeechRecognitionProvider(
+        scope = runtimeScope,
+        settings = settingsRepository,
+        keys = apiKeyStore,
+        groq = WhisperSpeechRecognitionProvider(
+            scope = runtimeScope,
+            audioCapture = AndroidAudioCapture(),
+            transcription = GroqWhisperTranscriptionProvider(httpClient, json),
+            model = { runBlocking { settingsRepository.settings.first().sttModelId } },
+            languageHint = { null },
+            diagnostics = { event -> debugVoice(event) },
+        ),
+        system = AndroidSpeechRecognitionProvider(this),
+        diagnostics = { event -> debugVoice(event) },
+    )
+
+    fun runtimeSpeechSynthesisProvider(): RuntimeSpeechSynthesisProvider {
+        val system = AndroidSpeechSynthesisProvider(this)
+        val local = LocalNeuralSpeechSynthesisProvider(
+            packs = AndroidTtsModelPackStore(this),
+            engine = SherpaOnnxLocalNeuralTtsEngine(this),
+        )
+        return RuntimeSpeechSynthesisProvider(
+            settings = settingsRepository,
+            local = local,
+            system = system,
+            diagnostics = { event -> debugVoice(event) },
+        )
+    }
+
+    private fun debugVoice(event: String) {
+        if (com.dustincorder.rai.BuildConfig.DEBUG) android.util.Log.d("Raya-Voice", event)
     }
 }

@@ -105,8 +105,8 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(RayaViewModel::class.java))
         return RayaViewModel(
-            speechRecognition = AndroidSpeechRecognitionProvider(application),
-            speechSynthesis = AndroidSpeechSynthesisProvider(application),
+            speechRecognition = application.runtimeSpeechRecognitionProvider(),
+            speechSynthesis = application.runtimeSpeechSynthesisProvider(),
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
             voiceDiagnostics = AndroidRayaVoiceDiagnostics(),

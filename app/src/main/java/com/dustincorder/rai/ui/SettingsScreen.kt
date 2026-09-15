@@ -52,9 +52,11 @@ import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
+import com.dustincorder.rai.data.settings.SttEngine
 import com.dustincorder.rai.data.llm.DiscoveredModel
 import com.dustincorder.rai.data.llm.ModelListState
 import com.dustincorder.rai.data.llm.chatModels
+import com.dustincorder.rai.domain.TtsEngine
 import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
@@ -243,6 +245,12 @@ fun SettingsScreen(
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(stringResource(R.string.voice_section), style = MaterialTheme.typography.titleMedium)
+                    Text("STT engine", style = MaterialTheme.typography.labelMedium)
+                    ChipGrid(
+                        SttEngine.entries,
+                        draft.sttEngine,
+                        { if (it == SttEngine.GroqWhisper) "Groq Whisper" else "System" },
+                    ) { draft = draft.copy(sttEngine = it) }
                     Text(stringResource(R.string.stt_model), style = MaterialTheme.typography.labelMedium)
                     OutlinedTextField(
                         value = draft.sttModelId,
@@ -256,6 +264,12 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text("TTS engine", style = MaterialTheme.typography.labelMedium)
+                    ChipGrid(
+                        TtsEngine.entries,
+                        draft.ttsEngine,
+                        { if (it == TtsEngine.LocalNeural) "Local Neural" else "System" },
+                    ) { draft = draft.copy(ttsEngine = it) }
                 }
             }
 
