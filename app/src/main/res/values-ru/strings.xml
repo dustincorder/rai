@@ -1,0 +1,11 @@
+<resources>
+    <string name="settings">Настройки</string><string name="back">Назад</string>
+    <string name="clear_conversation">Очистить диалог</string><string name="settings_title">Настройки</string>
+    <string name="clear_conversation_title">Очистить диалог?</string><string name="clear_conversation_message">Текущая история разговора будет удалена.</string>
+    <string name="clear">Очистить</string><string name="cancel">Отмена</string><string name="message_placeholder">Написать сообщение…</string>
+    <string name="voice_chat">Голосовой чат</string><string name="send_message">Отправить сообщение</string><string name="stop_speech">Остановить речь</string><string name="end_voice_chat">Завершить голосовой чат</string>
+    <string name="llm">LLM</string><string name="provider">Провайдер</string><string name="protocol">Протокол</string><string name="base_url">Base URL</string><string name="model_id">ID модели</string><string name="api_key">API key</string><string name="delete_key">Удалить ключ</string>
+    <string name="language">Язык</string><string name="language_auto">Язык разговора определяется автоматически.</string><string name="save">Сохранить</string><string name="test_connection">Проверить</string><string name="checking_connection">Проверка подключения…</string>
+    <string name="api_key_configured">API key сохранён</string><string name="api_key_missing">API key не сохранён</string><string name="api_key_replace">Введите новый ключ, чтобы заменить</string><string name="api_key_enter">Введите API key</string>
+    <string name="unsafe_http">Разрешить небезопасный HTTP</string><string name="unsafe_http_warning">HTTP не шифрует запросы и API key. Используйте только для доверенного локального сервера.</string><string name="microphone_permission_denied">Разрешение на микрофон не предоставлено.</string>
+</resources>

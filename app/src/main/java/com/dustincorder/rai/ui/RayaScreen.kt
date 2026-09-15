@@ -73,6 +73,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.dustincorder.rai.R
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.InteractionMode
@@ -123,10 +125,10 @@ fun RayaScreen(
                         onClick = { showClearDialog = true },
                         enabled = canClear,
                     ) {
-                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "Очистить диалог")
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = stringResource(R.string.clear_conversation))
                     }
                     IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "Настройки")
+                        Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.settings))
                     }
                 },
             )
@@ -173,19 +175,19 @@ fun RayaScreen(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("Очистить диалог?") },
-            text = { Text("Текущая история разговора будет удалена.") },
+            title = { Text(stringResource(R.string.clear_conversation_title)) },
+            text = { Text(stringResource(R.string.clear_conversation_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     onClearConversation()
                     showClearDialog = false
                 }) {
-                    Text("Очистить")
+                    Text(stringResource(R.string.clear))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) {
-                    Text("Отмена")
+                    Text(stringResource(R.string.cancel))
                 }
             },
         )
@@ -291,12 +293,15 @@ private fun TextComposer(
                 OutlinedTextField(
                     value = draft,
                     onValueChange = onDraftChange,
-                    placeholder = { Text("Написать сообщение…") },
+                    placeholder = { Text(stringResource(R.string.message_placeholder)) },
                     modifier = Modifier.weight(1f),
                     maxLines = 4,
                     enabled = !busy,
                     shape = RoundedCornerShape(24.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Send,
+                    ),
                     keyboardActions = KeyboardActions(onSend = {
                         if (!busy && draft.isNotBlank()) onSubmitText()
                     }),
@@ -306,11 +311,11 @@ private fun TextComposer(
                     enabled = !busy,
                 ) {
                     if (draft.isBlank()) {
-                        Icon(Icons.Outlined.MicNone, contentDescription = "Голосовой чат")
+                        Icon(Icons.Outlined.MicNone, contentDescription = stringResource(R.string.voice_chat))
                     } else {
                         Icon(
                             Icons.AutoMirrored.Outlined.Send,
-                            contentDescription = "Отправить сообщение",
+                            contentDescription = stringResource(R.string.send_message),
                         )
                     }
                 }
@@ -342,7 +347,7 @@ private fun VoiceControls(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Column(Modifier.weight(1f, fill = true)) {
-                    Text("Голосовой чат", style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(R.string.voice_chat), style = MaterialTheme.typography.titleSmall)
                     Text(
                         state.status,
                         style = MaterialTheme.typography.labelSmall,
@@ -351,7 +356,7 @@ private fun VoiceControls(
                 }
                 if (state.isSpeaking) {
                     IconButton(onClick = onInterruptSpeech) {
-                        Icon(Icons.Outlined.Stop, contentDescription = "Остановить речь")
+                        Icon(Icons.Outlined.Stop, contentDescription = stringResource(R.string.stop_speech))
                     }
                 }
                 IconButton(onClick = onToggleMicrophone) {
@@ -365,7 +370,7 @@ private fun VoiceControls(
                     )
                 }
                 IconButton(onClick = onEndVoiceSession) {
-                    Icon(Icons.Outlined.CallEnd, contentDescription = "Завершить голосовой чат")
+                    Icon(Icons.Outlined.CallEnd, contentDescription = stringResource(R.string.end_voice_chat))
                 }
             }
         }

@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Raya</string>
+    <string name="settings">Settings</string>
+    <string name="back">Back</string>
+    <string name="clear_conversation">Clear conversation</string>
+    <string name="settings_title">Settings</string>
+    <string name="clear_conversation_title">Clear conversation?</string>
+    <string name="clear_conversation_message">Current conversation history will be deleted.</string>
+    <string name="clear">Clear</string>
+    <string name="cancel">Cancel</string>
+    <string name="message_placeholder">Write a message…</string>
+    <string name="voice_chat">Voice chat</string>
+    <string name="send_message">Send message</string>
+    <string name="stop_speech">Stop speech</string>
+    <string name="end_voice_chat">End voice chat</string>
+    <string name="llm">LLM</string>
+    <string name="provider">Provider</string>
+    <string name="protocol">Protocol</string>
+    <string name="base_url">Base URL</string>
+    <string name="model_id">Model ID</string>
+    <string name="api_key">API key</string>
+    <string name="delete_key">Delete key</string>
+    <string name="language">Language</string>
+    <string name="language_auto">Conversation language is detected automatically.</string>
+    <string name="save">Save</string>
+    <string name="test_connection">Test</string>
+    <string name="checking_connection">Checking connection…</string>
+    <string name="api_key_configured">API key configured</string>
+    <string name="api_key_missing">API key not configured</string>
+    <string name="api_key_replace">Enter a new key to replace it</string>
+    <string name="api_key_enter">Enter API key</string>
+    <string name="unsafe_http">Allow insecure HTTP</string>
+    <string name="unsafe_http_warning">HTTP does not encrypt requests or API keys. Use only with a trusted local server.</string>
+    <string name="microphone_permission_denied">Microphone permission was not granted.</string>
+</resources>

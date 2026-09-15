@@ -40,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.dustincorder.rai.R
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.data.settings.AppSettings
@@ -68,10 +70,10 @@ fun SettingsScreen(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("Настройки") },
+                title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
             )
@@ -90,15 +92,15 @@ fun SettingsScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("LLM", style = MaterialTheme.typography.titleMedium)
-                    Text("Provider", style = MaterialTheme.typography.labelMedium)
+                    Text(stringResource(R.string.llm), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.provider), style = MaterialTheme.typography.labelMedium)
                     ChipGrid(LlmProviderPreset.entries, draft.provider, { it.name }) { provider ->
                         draft = draft.copy(provider = provider, modelId = provider.defaultModel)
                         apiKey = ""
                         viewModel.refreshApiKeyStatus(provider)
                     }
                     if (draft.provider == LlmProviderPreset.Custom) {
-                        Text("Protocol", style = MaterialTheme.typography.labelMedium)
+                        Text(stringResource(R.string.protocol), style = MaterialTheme.typography.labelMedium)
                         ChipGrid(
                             LlmProtocol.entries,
                             draft.customProtocol,
@@ -109,7 +111,7 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = draft.customBaseUrl,
                             onValueChange = { draft = draft.copy(customBaseUrl = it) },
-                            label = { Text("Base URL") },
+                            label = { Text(stringResource(R.string.base_url)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -132,18 +134,18 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = draft.modelId,
                         onValueChange = { draft = draft.copy(modelId = it) },
-                        label = { Text("Model ID") },
+                            label = { Text(stringResource(R.string.model_id)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     val keyPlaceholder = when (apiKeyStatus) {
-                        ApiKeyStatus.Configured -> "Введите новый ключ, чтобы заменить"
-                        else -> "Введите API key"
+                        ApiKeyStatus.Configured -> stringResource(R.string.api_key_replace)
+                        else -> stringResource(R.string.api_key_enter)
                     }
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
-                        label = { Text("API key") },
+                        label = { Text(stringResource(R.string.api_key)) },
                         placeholder = { Text(keyPlaceholder) },
                         singleLine = true,
                         visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
@@ -160,7 +162,7 @@ fun SettingsScreen(
                                     apiKey = ""
                                     viewModel.deleteKey(draft.provider)
                                 }) {
-                                    Icon(Icons.Outlined.Delete, contentDescription = "Удалить ключ")
+                                 Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.delete_key))
                                 }
                             }
                         },
@@ -189,9 +191,9 @@ fun SettingsScreen(
 
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Язык", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.language), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Язык разговора определяется автоматически.",
+                        stringResource(R.string.language_auto),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -201,7 +203,7 @@ fun SettingsScreen(
             val status = connectionStatus
             when (status) {
                 is ConnectionStatus.None -> Unit
-                is ConnectionStatus.Checking -> Text("Проверка подключения…")
+                is ConnectionStatus.Checking -> Text(stringResource(R.string.checking_connection))
                 is ConnectionStatus.Message -> Text(
                     status.message,
                     color = if (status.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -211,11 +213,11 @@ fun SettingsScreen(
                 Button(
                     onClick = { viewModel.save(draft, apiKey) },
                     modifier = Modifier.weight(1f),
-                ) { Text("Сохранить") }
+                ) { Text(stringResource(R.string.save)) }
                 Button(
                     onClick = { viewModel.testConnection(draft, apiKey) },
                     modifier = Modifier.weight(1f),
-                ) { Text("Проверить") }
+                ) { Text(stringResource(R.string.test_connection)) }
             }
             if (BuildConfig.DEBUG) {
                 Text(
