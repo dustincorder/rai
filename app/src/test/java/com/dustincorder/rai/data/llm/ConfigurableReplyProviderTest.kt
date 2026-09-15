@@ -348,11 +348,13 @@ class ConfigurableReplyProviderTest {
 
     @Test
     fun `openai sse stream emits visible deltas then validated completion`() = runTest {
-        // Covered by ReplyStreamingTest; provider integration remains non-blocking when SSE is unsupported.
-        return@runTest
-        // Streaming envelope is exercised by ReplyStreamingTest; keep provider integration assertion below.
         repository.save(custom(LlmProtocol.OpenAiCompatible))
         keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                """{"choices":[{"message":{"role":"assistant","content":"{\"text\":\"Привет\",\"emotion\":\"happy\",\"language\":\"ru-RU\"}"}}]}""",
+            ),
+        )
         server.enqueue(
             MockResponse().setBody(
                 "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"text\\\":\\\"При\"}}}]}\n" +

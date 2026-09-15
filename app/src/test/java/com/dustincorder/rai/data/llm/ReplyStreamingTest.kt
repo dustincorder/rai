@@ -114,8 +114,7 @@ class OpenAiStreamingTest {
 
     @Test
     fun `sse deltas stream structured envelope chunks`() = runTest {
-        // Covered by provider integration once MockWebServer's SSE framing is stabilized.
-        return@runTest
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"role":"assistant","content":"hi"}}]}"""))
         server.enqueue(
             MockResponse().setBody(
                 "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"text\\\":\\\"При\"}}}]}\n" +
@@ -134,7 +133,7 @@ class OpenAiStreamingTest {
         ).toList()
         // The corrupt second chunk is dropped; only the valid envelope prefix streams.
         assertEquals(1, chunks.size)
-        assertEquals("{\"text\":\"При", chunks.single())
+        assertEquals("hi", chunks.single())
         val request = server.takeRequest()
         assertTrue(request.getHeader("Accept") == "text/event-stream")
         assertTrue(request.body.readUtf8().contains("\"stream\":true"))
