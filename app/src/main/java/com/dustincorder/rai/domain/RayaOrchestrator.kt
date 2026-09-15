@@ -161,7 +161,6 @@ class RayaOrchestrator(
         if (enable) {
             when {
                 _state.value == RayaState.Listening ||
-                    _state.value is RayaState.Speaking ||
                     _state.value == RayaState.Idle -> beginVoiceTurn(resetActivity = true, explicitIntent = true)
             }
         } else {

@@ -33,9 +33,10 @@ private val RayaEmotion.semanticGaze: RayaGaze
         RayaEmotion.Thinking -> RayaGaze.Side
         RayaEmotion.Skeptical -> RayaGaze.Alert
         RayaEmotion.Confused -> RayaGaze.Side
-        RayaEmotion.Tired,
+        RayaEmotion.Concerned -> RayaGaze.Up
         RayaEmotion.Sad,
-        RayaEmotion.Concerned,
+        RayaEmotion.Embarrassed,
+        RayaEmotion.Tired,
         -> RayaGaze.Down
         else -> RayaGaze.Center
     }

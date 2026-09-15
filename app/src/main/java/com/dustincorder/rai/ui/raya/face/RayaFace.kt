@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -36,6 +37,24 @@ import kotlin.math.min
 import kotlin.random.Random
 
 private val EyeCyan = Color(0xFF00A8B5)
+
+private val semanticFaceGallery = listOf(
+    RayaFaceEmotion.Calm,
+    RayaFaceEmotion.Happy,
+    RayaFaceEmotion.Excited,
+    RayaFaceEmotion.Playful,
+    RayaFaceEmotion.Curious,
+    RayaFaceEmotion.SemanticThinking,
+    RayaFaceEmotion.Skeptical,
+    RayaFaceEmotion.Confused,
+    RayaFaceEmotion.Concerned,
+    RayaFaceEmotion.Sad,
+    RayaFaceEmotion.Embarrassed,
+    RayaFaceEmotion.Surprised,
+    RayaFaceEmotion.Angry,
+    RayaFaceEmotion.Annoyed,
+    RayaFaceEmotion.Tired,
+)
 
 @Composable
 fun RayaFace(
@@ -114,56 +133,64 @@ private fun DrawScope.drawFace(
     val shapeScale = listeningScale * speakingScale
     val eyeHeight = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.35f
-        RayaFaceEmotion.Happy -> eyeSize * 0.58f
-        RayaFaceEmotion.Excited -> eyeSize * 0.78f
-        RayaFaceEmotion.Playful -> eyeSize * 0.72f
-        RayaFaceEmotion.Curious -> eyeSize * 1.12f
-        RayaFaceEmotion.SemanticThinking -> eyeSize * 0.9f
-        RayaFaceEmotion.Skeptical -> eyeSize * 0.68f
-        RayaFaceEmotion.Confused -> eyeSize * 0.9f
-        RayaFaceEmotion.Concerned -> eyeSize * 0.62f
-        RayaFaceEmotion.Sad -> eyeSize * 0.58f
-        RayaFaceEmotion.Embarrassed -> eyeSize * 0.66f
-        RayaFaceEmotion.Annoyed -> eyeSize * 0.7f
+        RayaFaceEmotion.Happy -> eyeSize * 0.9f
+        RayaFaceEmotion.Excited -> eyeSize * 1.08f
+        RayaFaceEmotion.Playful -> eyeSize * 0.92f
+        RayaFaceEmotion.Curious -> eyeSize * 1.18f
+        RayaFaceEmotion.SemanticThinking -> eyeSize * 0.78f
+        RayaFaceEmotion.Skeptical -> eyeSize * 0.9f
+        RayaFaceEmotion.Confused -> eyeSize * 1.0f
+        RayaFaceEmotion.Concerned -> eyeSize * 0.92f
+        RayaFaceEmotion.Sad -> eyeSize * 0.78f
+        RayaFaceEmotion.Embarrassed -> eyeSize * 0.86f
+        RayaFaceEmotion.Annoyed -> eyeSize * 0.56f
         RayaFaceEmotion.Tired -> eyeSize * 0.46f
+        RayaFaceEmotion.Angry -> eyeSize * 0.95f
         RayaFaceEmotion.Error -> eyeSize * (0.72f + errorPulse * 0.18f)
         else -> eyeSize
     } * shapeScale
     val eyeWidth = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.25f
-        RayaFaceEmotion.Happy -> eyeSize * 1.15f
-        RayaFaceEmotion.Excited -> eyeSize * 1.2f
-        RayaFaceEmotion.Playful -> eyeSize * 1.12f
-        RayaFaceEmotion.Skeptical -> eyeSize * 1.08f
-        RayaFaceEmotion.Confused -> eyeSize * 1.1f
+        RayaFaceEmotion.Happy -> eyeSize * 1.28f
+        RayaFaceEmotion.Excited -> eyeSize * 1.34f
+        RayaFaceEmotion.Playful -> eyeSize * 1.18f
+        RayaFaceEmotion.Curious -> eyeSize * 1.12f
+        RayaFaceEmotion.Skeptical -> eyeSize * 1.16f
+        RayaFaceEmotion.Confused -> eyeSize * 1.08f
+        RayaFaceEmotion.Concerned -> eyeSize * 1.04f
+        RayaFaceEmotion.Sad -> eyeSize * 1.02f
+        RayaFaceEmotion.Embarrassed -> eyeSize * 1.02f
+        RayaFaceEmotion.Annoyed -> eyeSize * 1.22f
+        RayaFaceEmotion.Tired -> eyeSize * 1.12f
         RayaFaceEmotion.Error -> eyeSize * (0.9f + errorPulse * 0.1f)
         else -> eyeSize
     }
     val eyeAngle = when (state.emotion) {
-        RayaFaceEmotion.Angry -> -13f
-        RayaFaceEmotion.Concerned -> 10f
-        RayaFaceEmotion.Curious -> -6f
-        RayaFaceEmotion.SemanticThinking -> -4f
-        RayaFaceEmotion.Playful -> -8f
-        RayaFaceEmotion.Skeptical -> 8f
-        RayaFaceEmotion.Confused -> -5f
-        RayaFaceEmotion.Sad -> 8f
-        RayaFaceEmotion.Embarrassed -> 5f
-        RayaFaceEmotion.Annoyed -> -10f
+        RayaFaceEmotion.Happy -> -8f
+        RayaFaceEmotion.Excited -> -4f
+        RayaFaceEmotion.Playful -> -5f
+        RayaFaceEmotion.Curious -> -3f
+        RayaFaceEmotion.SemanticThinking -> -12f
+        RayaFaceEmotion.Skeptical -> 7f
+        RayaFaceEmotion.Confused -> 2f
+        RayaFaceEmotion.Concerned -> -4f
+        RayaFaceEmotion.Angry -> -18f
         else -> 0f
     }
     val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
 
     val leftHeight = when (state.emotion) {
-        RayaFaceEmotion.Playful -> eyeHeight * 0.82f
-        RayaFaceEmotion.Skeptical -> eyeHeight * 0.72f
-        RayaFaceEmotion.Confused -> eyeHeight * 1.12f
+        RayaFaceEmotion.Playful -> eyeHeight * 1.04f
+        RayaFaceEmotion.Skeptical -> eyeHeight * 0.68f
+        RayaFaceEmotion.Confused -> eyeHeight * 1.14f
+        RayaFaceEmotion.Embarrassed -> eyeHeight * 0.94f
         else -> eyeHeight
     }
     val rightHeight = when (state.emotion) {
-        RayaFaceEmotion.Playful -> eyeHeight * 1.04f
-        RayaFaceEmotion.Skeptical -> eyeHeight * 1.12f
-        RayaFaceEmotion.Confused -> eyeHeight * 0.82f
+        RayaFaceEmotion.Playful -> eyeHeight * 0.78f
+        RayaFaceEmotion.Skeptical -> eyeHeight * 1.18f
+        RayaFaceEmotion.Confused -> eyeHeight * 0.78f
+        RayaFaceEmotion.Embarrassed -> eyeHeight * 0.82f
         else -> eyeHeight
     }
 
@@ -210,8 +237,8 @@ private fun DrawScope.drawSurprisedMouth(width: Float, height: Float, color: Col
 }
 
 private fun DrawScope.drawAngryMouth(width: Float, height: Float, color: Color) {
-    drawLine(color, point(width * 0.44f, height * 0.69f), point(width * 0.5f, height * 0.66f), width * 0.018f, StrokeCap.Square)
-    drawLine(color, point(width * 0.5f, height * 0.66f), point(width * 0.56f, height * 0.69f), width * 0.018f, StrokeCap.Square)
+    drawLine(color, point(width * 0.44f, height * 0.66f), point(width * 0.5f, height * 0.71f), width * 0.018f, StrokeCap.Square)
+    drawLine(color, point(width * 0.5f, height * 0.71f), point(width * 0.56f, height * 0.66f), width * 0.018f, StrokeCap.Square)
 }
 
 private fun point(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(x, y)
@@ -249,18 +276,27 @@ private fun RayaFaceErrorPreview() {
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, widthDp = 480, heightDp = 1_400)
+@Preview(showBackground = true, backgroundColor = 0xFFF9F9FD, widthDp = 480, heightDp = 2_100)
 @Composable
 private fun RayaFaceExpressionGridPreview() {
     RayaTheme {
         Column {
-            RayaFaceEmotion.entries.chunked(2).forEach { row ->
-                Row(modifier = Modifier.height(260.dp)) {
+            semanticFaceGallery.chunked(2).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(260.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     row.forEach { emotion ->
-                        RayaFace(
-                            state = RayaFaceState(emotion = emotion),
-                            modifier = Modifier.size(240.dp),
-                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            RayaFace(
+                                state = RayaFaceState(emotion = emotion),
+                                modifier = Modifier.size(220.dp),
+                            )
+                            androidx.compose.material3.Text(emotion.name)
+                        }
                     }
                 }
             }

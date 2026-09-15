@@ -40,6 +40,18 @@ class RayaStateMapperTest {
     }
 
     @Test
+    fun `speaking flag stays true when microphone is disabled`() {
+        val state = rayaUiStateFor(
+            RayaState.Speaking("test"),
+            microphoneEnabled = false,
+            semanticEmotion = RayaEmotion.Happy,
+        )
+
+        assertTrue(state.isSpeaking)
+        assertTrue(state.face.speaking)
+    }
+
+    @Test
     fun `error still has priority over semantic emotion`() {
         val state = rayaUiStateFor(
             RayaState.Error("failure"),

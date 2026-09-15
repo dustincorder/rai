@@ -283,6 +283,82 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `speaking remains speaking when microphone is toggled off`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("B"), orchestrator.state.value)
+        assertFalse(orchestrator.microphoneEnabled.value)
+        assertTrue(synthesis.speakCount == 1)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `speaking remains speaking when microphone is toggled on`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+
+        assertEquals(RayaState.Speaking("B"), orchestrator.state.value)
+        assertTrue(orchestrator.microphoneEnabled.value)
+        assertEquals(1, synthesis.speakCount)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `speaking mic toggles then stop stops tts without starting recognition`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, ответь", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        orchestrator.interruptSpeech()
+        advanceTimeBy(RayaOrchestrator.INTERRUPT_TTS_STOP_DELAY_MS)
+        runCurrent()
+
+        assertTrue(synthesis.stopCount >= 1)
+        assertFalse(orchestrator.state.value is RayaState.Error)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
     fun `E endVoiceSession cancels recognition and preserves history`() = runTest {
         val recognition = FakeRecognitionProvider()
         val synthesis = FakeSynthesisProvider()
