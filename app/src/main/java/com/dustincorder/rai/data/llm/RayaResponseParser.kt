@@ -58,9 +58,18 @@ private fun stripMarkdownFence(input: String): String {
 fun String?.toRayaEmotion(): RayaEmotion = when (this?.trim()?.lowercase()) {
     "calm" -> RayaEmotion.Calm
     "happy" -> RayaEmotion.Happy
+    "excited" -> RayaEmotion.Excited
+    "playful" -> RayaEmotion.Playful
     "curious" -> RayaEmotion.Curious
+    "thinking" -> RayaEmotion.Thinking
+    "skeptical" -> RayaEmotion.Skeptical
+    "confused" -> RayaEmotion.Confused
     "concerned" -> RayaEmotion.Concerned
+    "sad" -> RayaEmotion.Sad
+    "embarrassed" -> RayaEmotion.Embarrassed
     "surprised" -> RayaEmotion.Surprised
     "angry" -> RayaEmotion.Angry
+    "annoyed" -> RayaEmotion.Annoyed
+    "tired" -> RayaEmotion.Tired
     else -> RayaEmotion.Calm
 }

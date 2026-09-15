@@ -3,10 +3,19 @@ package com.dustincorder.rai.domain
 enum class RayaEmotion {
     Calm,
     Happy,
+    Excited,
+    Playful,
     Curious,
+    Thinking,
+    Skeptical,
+    Confused,
     Concerned,
+    Sad,
+    Embarrassed,
     Surprised,
     Angry,
+    Annoyed,
+    Tired,
 }
 
 /**

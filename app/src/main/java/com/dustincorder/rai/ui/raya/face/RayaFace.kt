@@ -83,11 +83,12 @@ private val RayaGaze.horizontalOffset: Float
     get() = when (this) {
         RayaGaze.Center, RayaGaze.Up, RayaGaze.Down, RayaGaze.Wide -> 0f
         RayaGaze.Alert -> 0.018f
+        RayaGaze.Side -> 0.045f
     }
 
 private val RayaGaze.verticalOffset: Float
     get() = when (this) {
-        RayaGaze.Center, RayaGaze.Alert, RayaGaze.Wide -> 0f
+        RayaGaze.Center, RayaGaze.Alert, RayaGaze.Side, RayaGaze.Wide -> 0f
         RayaGaze.Up -> -0.025f
         RayaGaze.Down -> 0.025f
     }
@@ -114,14 +115,27 @@ private fun DrawScope.drawFace(
     val eyeHeight = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.35f
         RayaFaceEmotion.Happy -> eyeSize * 0.58f
+        RayaFaceEmotion.Excited -> eyeSize * 0.78f
+        RayaFaceEmotion.Playful -> eyeSize * 0.72f
         RayaFaceEmotion.Curious -> eyeSize * 1.12f
+        RayaFaceEmotion.SemanticThinking -> eyeSize * 0.9f
+        RayaFaceEmotion.Skeptical -> eyeSize * 0.68f
+        RayaFaceEmotion.Confused -> eyeSize * 0.9f
         RayaFaceEmotion.Concerned -> eyeSize * 0.62f
+        RayaFaceEmotion.Sad -> eyeSize * 0.58f
+        RayaFaceEmotion.Embarrassed -> eyeSize * 0.66f
+        RayaFaceEmotion.Annoyed -> eyeSize * 0.7f
+        RayaFaceEmotion.Tired -> eyeSize * 0.46f
         RayaFaceEmotion.Error -> eyeSize * (0.72f + errorPulse * 0.18f)
         else -> eyeSize
     } * shapeScale
     val eyeWidth = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.25f
         RayaFaceEmotion.Happy -> eyeSize * 1.15f
+        RayaFaceEmotion.Excited -> eyeSize * 1.2f
+        RayaFaceEmotion.Playful -> eyeSize * 1.12f
+        RayaFaceEmotion.Skeptical -> eyeSize * 1.08f
+        RayaFaceEmotion.Confused -> eyeSize * 1.1f
         RayaFaceEmotion.Error -> eyeSize * (0.9f + errorPulse * 0.1f)
         else -> eyeSize
     }
@@ -129,12 +143,32 @@ private fun DrawScope.drawFace(
         RayaFaceEmotion.Angry -> -13f
         RayaFaceEmotion.Concerned -> 10f
         RayaFaceEmotion.Curious -> -6f
+        RayaFaceEmotion.SemanticThinking -> -4f
+        RayaFaceEmotion.Playful -> -8f
+        RayaFaceEmotion.Skeptical -> 8f
+        RayaFaceEmotion.Confused -> -5f
+        RayaFaceEmotion.Sad -> 8f
+        RayaFaceEmotion.Embarrassed -> 5f
+        RayaFaceEmotion.Annoyed -> -10f
         else -> 0f
     }
     val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
 
-    drawEye(width * (0.36f + gazeX) - errorOffset, centerY, eyeWidth, eyeHeight, color, eyeAngle, blinking)
-    drawEye(width * (0.64f + gazeX) + errorOffset, centerY, eyeWidth, eyeHeight, color, -eyeAngle, blinking)
+    val leftHeight = when (state.emotion) {
+        RayaFaceEmotion.Playful -> eyeHeight * 0.82f
+        RayaFaceEmotion.Skeptical -> eyeHeight * 0.72f
+        RayaFaceEmotion.Confused -> eyeHeight * 1.12f
+        else -> eyeHeight
+    }
+    val rightHeight = when (state.emotion) {
+        RayaFaceEmotion.Playful -> eyeHeight * 1.04f
+        RayaFaceEmotion.Skeptical -> eyeHeight * 1.12f
+        RayaFaceEmotion.Confused -> eyeHeight * 0.82f
+        else -> eyeHeight
+    }
+
+    drawEye(width * (0.36f + gazeX) - errorOffset, centerY, eyeWidth, leftHeight, color, eyeAngle, blinking)
+    drawEye(width * (0.64f + gazeX) + errorOffset, centerY, eyeWidth, rightHeight, color, -eyeAngle, blinking)
 
     when (state.emotion) {
         RayaFaceEmotion.Thinking -> drawThinkingDots(width, height, color, thinkingSweep)

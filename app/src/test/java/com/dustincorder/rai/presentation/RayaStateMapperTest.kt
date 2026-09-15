@@ -60,6 +60,10 @@ class RayaStateMapperTest {
             RayaFaceEmotion.Thinking,
             rayaUiStateFor(RayaState.Thinking, semanticEmotion = RayaEmotion.Surprised).face.emotion,
         )
+        assertEquals(
+            RayaFaceEmotion.SemanticThinking,
+            rayaUiStateFor(RayaState.Idle, semanticEmotion = RayaEmotion.Thinking).face.emotion,
+        )
     }
 
     @Test
@@ -75,10 +79,19 @@ class RayaStateMapperTest {
         val mapping = mapOf(
             RayaEmotion.Calm to RayaFaceEmotion.Calm,
             RayaEmotion.Happy to RayaFaceEmotion.Happy,
+            RayaEmotion.Excited to RayaFaceEmotion.Excited,
+            RayaEmotion.Playful to RayaFaceEmotion.Playful,
             RayaEmotion.Curious to RayaFaceEmotion.Curious,
+            RayaEmotion.Thinking to RayaFaceEmotion.SemanticThinking,
+            RayaEmotion.Skeptical to RayaFaceEmotion.Skeptical,
+            RayaEmotion.Confused to RayaFaceEmotion.Confused,
             RayaEmotion.Concerned to RayaFaceEmotion.Concerned,
+            RayaEmotion.Sad to RayaFaceEmotion.Sad,
+            RayaEmotion.Embarrassed to RayaFaceEmotion.Embarrassed,
             RayaEmotion.Surprised to RayaFaceEmotion.Surprised,
             RayaEmotion.Angry to RayaFaceEmotion.Angry,
+            RayaEmotion.Annoyed to RayaFaceEmotion.Annoyed,
+            RayaEmotion.Tired to RayaFaceEmotion.Tired,
         )
         mapping.forEach { (emotion, face) ->
             assertEquals(face, emotion.toFaceEmotion())

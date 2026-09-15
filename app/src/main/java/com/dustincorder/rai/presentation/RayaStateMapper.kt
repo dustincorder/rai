@@ -12,11 +12,33 @@ import com.dustincorder.rai.presentation.model.RayaGaze
 fun RayaEmotion.toFaceEmotion(): RayaFaceEmotion = when (this) {
     RayaEmotion.Calm -> RayaFaceEmotion.Calm
     RayaEmotion.Happy -> RayaFaceEmotion.Happy
+    RayaEmotion.Excited -> RayaFaceEmotion.Excited
+    RayaEmotion.Playful -> RayaFaceEmotion.Playful
     RayaEmotion.Curious -> RayaFaceEmotion.Curious
+    RayaEmotion.Thinking -> RayaFaceEmotion.SemanticThinking
+    RayaEmotion.Skeptical -> RayaFaceEmotion.Skeptical
+    RayaEmotion.Confused -> RayaFaceEmotion.Confused
     RayaEmotion.Concerned -> RayaFaceEmotion.Concerned
+    RayaEmotion.Sad -> RayaFaceEmotion.Sad
+    RayaEmotion.Embarrassed -> RayaFaceEmotion.Embarrassed
     RayaEmotion.Surprised -> RayaFaceEmotion.Surprised
     RayaEmotion.Angry -> RayaFaceEmotion.Angry
+    RayaEmotion.Annoyed -> RayaFaceEmotion.Annoyed
+    RayaEmotion.Tired -> RayaFaceEmotion.Tired
 }
+
+private val RayaEmotion.semanticGaze: RayaGaze
+    get() = when (this) {
+        RayaEmotion.Curious -> RayaGaze.Side
+        RayaEmotion.Thinking -> RayaGaze.Side
+        RayaEmotion.Skeptical -> RayaGaze.Alert
+        RayaEmotion.Confused -> RayaGaze.Side
+        RayaEmotion.Tired,
+        RayaEmotion.Sad,
+        RayaEmotion.Concerned,
+        -> RayaGaze.Down
+        else -> RayaGaze.Center
+    }
 
 fun rayaUiStateFor(
     state: RayaState,
@@ -28,7 +50,10 @@ fun rayaUiStateFor(
     semanticEmotion: RayaEmotion = RayaEmotion.Calm,
 ): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
-        face = RayaFaceState(emotion = semanticEmotion.toFaceEmotion()),
+        face = RayaFaceState(
+            emotion = semanticEmotion.toFaceEmotion(),
+            gaze = semanticEmotion.semanticGaze,
+        ),
         conversation = conversation,
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
@@ -62,7 +87,7 @@ fun rayaUiStateFor(
     is RayaState.Speaking -> RayaUiState(
         face = RayaFaceState(
             emotion = semanticEmotion.toFaceEmotion(),
-            gaze = RayaGaze.Center,
+            gaze = semanticEmotion.semanticGaze,
             speaking = true,
         ),
         status = "Говорю",

@@ -1,5 +1,6 @@
 package com.dustincorder.rai.data.llm
 
+import com.dustincorder.rai.domain.RayaEmotion
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,6 +29,18 @@ class RayaSystemPromptTest {
         assertTrue("prompt must list the language field", prompt.contains("\"language\""))
         assertTrue("prompt must enumerate the supported emotion values", prompt.contains("calm"))
         assertTrue("prompt must enumerate the supported emotion values", prompt.contains("surprised"))
+    }
+
+    @Test
+    fun `built in system prompt lists every supported semantic emotion`() {
+        val prompt = rayaSystemPrompt()
+
+        RayaEmotion.entries.forEach { emotion ->
+            assertTrue(
+                "prompt must list ${emotion.name}",
+                prompt.contains(emotion.name.lowercase()),
+            )
+        }
     }
 
     @Test

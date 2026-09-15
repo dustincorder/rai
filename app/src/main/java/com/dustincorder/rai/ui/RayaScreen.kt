@@ -56,10 +56,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +79,7 @@ import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
 import com.dustincorder.rai.ui.theme.RayaTheme
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.collect
 
 private val FACE_SCRIM_HEIGHT_DP = 60.dp
 private val EMPTY_CONVERSATION_TOP_PADDING_DP = 360.dp
@@ -384,12 +385,18 @@ private fun ConversationArea(
     val showTransient = listening && state.userText.isNotBlank() &&
         messages.lastOrNull()?.text != state.userText
     val thinking = state.face.emotion == RayaFaceEmotion.Thinking
-    val nearBottom by remember {
-        derivedStateOf {
+    var followTail by remember { mutableStateOf(true) }
+
+    LaunchedEffect(listState) {
+        snapshotFlow {
             val layout = listState.layoutInfo
-            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible >= layout.totalItemsCount - 2
-        }
+            if (layout.totalItemsCount == 0) {
+                true
+            } else {
+                val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+                lastVisible >= layout.totalItemsCount - 2
+            }
+        }.collect { followTail = it }
     }
 
     val items: List<Any> = buildList {
@@ -398,8 +405,9 @@ private fun ConversationArea(
         if (thinking) add(ThinkingIndicator)
     }
 
-    LaunchedEffect(items.size) {
-        if (items.isNotEmpty() && nearBottom) {
+    LaunchedEffect(items) {
+        if (items.isNotEmpty() && followTail) {
+            androidx.compose.runtime.withFrameNanos { }
             listState.animateScrollToItem(items.lastIndex)
         }
     }
