@@ -11,12 +11,14 @@ class ConversationTailPolicyTest {
             .onViewportSample(totalItems = 10, currentItems = 10, atBottom = true)
 
         assertTrue(state.followTail)
+        assertFalse(state.pendingUserTurnScroll)
     }
 
     @Test
     fun `scrolled up plus passive assistant update stays in history`() {
         val state = ConversationTailPolicyState()
             .onViewportSample(totalItems = 10, currentItems = 10, atBottom = false)
+            .onManualScroll()
 
         assertFalse(state.followTail)
         assertFalse(state.onViewportSample(11, 10, atBottom = true).followTail)
@@ -30,6 +32,12 @@ class ConversationTailPolicyTest {
 
         assertTrue(state.followTail)
         assertTrue(state.handledUserTurnRevision == 1L)
+        assertTrue(state.pendingUserTurnScroll)
+
+        assertTrue(
+            "stale synchronized viewport sample cannot consume the latch",
+            state.onViewportSample(31, 31, atBottom = false).followTail,
+        )
     }
 
     @Test
@@ -37,8 +45,11 @@ class ConversationTailPolicyTest {
         val state = ConversationTailPolicyState()
             .onUserTurnRevision(1)
             .onViewportSample(31, 31, atBottom = false)
+            .onManualScroll()
 
         assertFalse(state.followTail)
+        assertFalse(state.pendingUserTurnScroll)
+        assertTrue(state.manualOverride)
     }
 
     @Test
@@ -52,5 +63,19 @@ class ConversationTailPolicyTest {
         assertTrue(afterPartial.followTail)
         assertTrue(afterFinal.followTail)
         assertTrue(afterThinking.followTail)
+        assertFalse(afterThinking.pendingUserTurnScroll)
+
+        val passiveAssistantAfterSettled = afterThinking.onViewportSample(33, 33, atBottom = false)
+        assertTrue(passiveAssistantAfterSettled.followTail)
+    }
+
+    @Test
+    fun `manual override remains off for later passive updates`() {
+        val state = ConversationTailPolicyState()
+            .onUserTurnRevision(1)
+            .onManualScroll()
+
+        assertFalse(state.onViewportSample(32, 32, atBottom = false).followTail)
+        assertFalse(state.onViewportSample(33, 33, atBottom = true).followTail)
     }
 }
