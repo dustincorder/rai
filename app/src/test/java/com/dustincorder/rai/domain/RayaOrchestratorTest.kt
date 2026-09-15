@@ -383,34 +383,41 @@ class RayaOrchestratorTest {
 
     @Test
     fun `N quick mic off toggled on before delayed cancel error keeps turn B alive`() = runTest {
-        val recognition = FakeRecognitionProvider()
+        val recognition = FakeRecognitionProvider().apply { autoAckCancel = false }
         val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("Привет, Райя!"))
         val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
 
         orchestrator.startVoiceSession()
         runCurrent()
         assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertEquals(1, recognition.startCount)
 
         orchestrator.toggleMicrophone()
         runCurrent()
         assertFalse(orchestrator.microphoneEnabled.value)
         assertEquals(RayaState.Idle, orchestrator.state.value)
 
-        recognition.staleCancellationErrorOnNextStart = SpeechRecognitionEvent.Error(
-            SpeechRecognitionErrorReason.Other,
-            "Ошибка распознавания речи (5).",
-        )
-
         orchestrator.toggleMicrophone()
         runCurrent()
 
-        assertEquals("stale old-generation error must be dropped at the adapter boundary", 1, recognition.suppressedCancellationEvents)
         assertTrue(orchestrator.voiceSessionActive.value)
         assertTrue(orchestrator.microphoneEnabled.value)
         assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertEquals("turn B must not start while the old cancellation is unresolved", 1, recognition.startCount)
         assertFalse("no fatal error from a stale cancellation", orchestrator.state.value is RayaState.Error)
 
-        val startsBeforeFinal = recognition.startCount
+        recognition.emit(SpeechRecognitionEvent.Error(SpeechRecognitionErrorReason.Other, "Ошибка распознавания речи (5)."))
+        runCurrent()
+
+        assertEquals(
+            "delayed old-generation cancel error must be swallowed at the adapter boundary",
+            1,
+            recognition.suppressedCancellationEvents,
+        )
+        assertEquals("turn B starts only after turn A settled", 2, recognition.startCount)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertFalse(orchestrator.state.value is RayaState.Error)
+
         recognition.emit(SpeechRecognitionEvent.Final("Рая, расскажи про марс", "ru-RU"))
         runCurrent()
 
@@ -422,7 +429,45 @@ class RayaOrchestratorTest {
             ),
             reply.lastMessages,
         )
-        assertEquals("no unexpected additional recognition turn", startsBeforeFinal, recognition.startCount)
+
+        reply.complete()
+        runCurrent()
+        assertEquals(RayaState.Speaking("Привет, Райя!"), orchestrator.state.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `N2 cancellation settle timeout with pending start proceeds on a fresh source`() = runTest {
+        val recognition = FakeRecognitionProvider().apply { autoAckCancel = false }
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("Привет, Райя!"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        assertEquals(1, recognition.startCount)
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        assertFalse(orchestrator.microphoneEnabled.value)
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        assertTrue(orchestrator.voiceSessionActive.value)
+        assertEquals("turn B waits for the old cancellation to settle", 1, recognition.startCount)
+
+        recognition.settleTimeout()
+        runCurrent()
+
+        assertEquals("bounded settle timeout must not block the pending start", 2, recognition.startCount)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertFalse(orchestrator.state.value is RayaState.Error)
+
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, устный вопрос", "ru-RU"))
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+        assertEquals(1, reply.callCount)
+        assertEquals(0, recognition.suppressedCancellationEvents)
 
         reply.complete()
         runCurrent()
@@ -1159,23 +1204,54 @@ class RayaOrchestratorTest {
 private class FakeRecognitionProvider : SpeechRecognitionProvider {
     private val _events = MutableSharedFlow<SpeechRecognitionEvent>(extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events
+    private val lifecycle = RecognitionAttemptLifecycle()
+    private var settleAck: CompletableDeferred<Unit>? = null
     var cancelCount = 0
     var startCount = 0
     var lastRequest: RecognitionRequest? = null
     var emitImmediateOnStart: SpeechRecognitionEvent? = null
     var throwOnStart = false
-    var staleCancellationErrorOnNextStart: SpeechRecognitionEvent? = null
+    var autoAckCancel = true
     var suppressedCancellationEvents = 0
-    private val cancellationGate = RecognitionCancellationGate()
+    var suppressedPartials = 0
 
     override suspend fun startListening(request: RecognitionRequest) {
+        when (lifecycle.onStartRequested()) {
+            RecognitionAttemptAction.StartNow -> beginAttempt(request)
+            RecognitionAttemptAction.WaitForSettleThenStart -> {
+                val ack = CompletableDeferred<Unit>()
+                settleAck = ack
+                ack.await()
+                settleAck = null
+                lifecycle.acknowledgeStart()
+                beginAttempt(request)
+            }
+        }
+    }
+
+    override fun cancel() {
+        cancelCount++
+        if (lifecycle.onCancelRequest() && autoAckCancel) {
+            lifecycle.onTerminalCallback()
+            settleAck?.complete(Unit)
+        }
+    }
+
+    override fun release() = Unit
+
+    fun settleTimeout() {
+        lifecycle.onSettleTimeout()
+        settleAck?.complete(Unit)
+    }
+
+    suspend fun emit(event: SpeechRecognitionEvent) {
+        deliver(event)
+    }
+
+    @Suppress("SameParameterValue")
+    private suspend fun beginAttempt(request: RecognitionRequest) {
         lastRequest = request
         startCount++
-        cancellationGate.markStarted()
-        staleCancellationErrorOnNextStart?.let { stale ->
-            staleCancellationErrorOnNextStart = null
-            deliver(stale)
-        }
         emitImmediateOnStart?.let { event ->
             emitImmediateOnStart = null
             deliver(event)
@@ -1183,22 +1259,25 @@ private class FakeRecognitionProvider : SpeechRecognitionProvider {
         if (throwOnStart) throw RuntimeException("startListening failure")
     }
 
-    override fun cancel() {
-        cancelCount++
-        cancellationGate.onCancel()
-    }
-
-    override fun release() = Unit
-
-    suspend fun emit(event: SpeechRecognitionEvent) {
-        _events.emit(event)
-    }
-
     private suspend fun deliver(event: SpeechRecognitionEvent) {
-        if (cancellationGate.shouldForward(event)) {
-            _events.emit(event)
-        } else {
-            suppressedCancellationEvents++
+        when (event) {
+            is SpeechRecognitionEvent.Partial -> {
+                if (lifecycle.shouldForwardPartial) {
+                    _events.emit(event)
+                } else {
+                    suppressedPartials++
+                }
+            }
+            is SpeechRecognitionEvent.Final,
+            is SpeechRecognitionEvent.Error,
+            -> {
+                if (lifecycle.onTerminalCallback()) {
+                    _events.emit(event)
+                } else {
+                    suppressedCancellationEvents++
+                    settleAck?.complete(Unit)
+                }
+            }
         }
     }
 }

@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
@@ -11,123 +13,243 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import com.dustincorder.rai.BuildConfig
-import com.dustincorder.rai.domain.RecognitionCancellationGate
+import com.dustincorder.rai.domain.RecognitionAttemptAction
+import com.dustincorder.rai.domain.RecognitionAttemptLifecycle
 import com.dustincorder.rai.domain.RecognitionRequest
 import com.dustincorder.rai.domain.SpeechRecognitionErrorReason
 import com.dustincorder.rai.domain.SpeechRecognitionEvent
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
 import com.dustincorder.rai.domain.toLanguagePlan
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeout
-import java.util.Locale
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
+import kotlin.time.Duration.Companion.milliseconds
 
+/**
+ * Android STT adapter with serialized recognition-attempt ownership.
+ *
+ * The single shared [SpeechRecognizer] listener is untagged: callbacks caused by a `cancel()`
+ * of one attempt can arrive after the next attempt was requested. Instead of guessing which
+ * generation an error belongs to, this provider never lets a new attempt overlap with a
+ * cancelled one (see [RecognitionAttemptLifecycle]):
+ *
+ *  - the pending attempt request is held back until the cancelled attempt acknowledges
+ *    (terminal callback) - its callbacks are swallowed at the boundary meanwhile;
+ *  - if no acknowledgement arrives within [CANCEL_SETTLE_TIMEOUT_MS], the recognizer instance
+ *    is destroyed and recreated so no callback of the old source can ever reach the new
+ *    attempt, and only then is the pending attempt started.
+ *
+ * All `SpeechRecognizer` lifecycle calls happen on the Android main thread.
+ */
 class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProvider {
+    private val appContext = context.applicationContext
+    private val lifecycle = RecognitionAttemptLifecycle()
+    private val lifecycleMutex = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     private val _events = MutableSharedFlow<SpeechRecognitionEvent>(extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
-    private val cancellationGate = RecognitionCancellationGate()
     private var detectedLanguageTag: String? = null
     private var detectionSupported: Boolean? = null
 
     private val supportExecutor = Executors.newSingleThreadExecutor()
 
-    private val recognizer = SpeechRecognizer.createSpeechRecognizer(context.applicationContext).apply {
-        setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                debug("stt.onReadyForSpeech")
-            }
+    private lateinit var recognizer: SpeechRecognizer
+    private var settleAck: CompletableDeferred<Unit>? = null
 
-            override fun onBeginningOfSpeech() {
-                debug("stt.onBeginningOfSpeech")
-            }
+    private val mainHandler = Handler(Looper.getMainLooper())
 
-            override fun onRmsChanged(rmsdB: Float) = Unit
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
+    private val listener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            debug("stt.onReadyForSpeech")
+        }
 
-            override fun onEndOfSpeech() {
-                debug("stt.onEndOfSpeech")
-            }
+        override fun onBeginningOfSpeech() {
+            debug("stt.onBeginningOfSpeech")
+        }
 
-            override fun onPartialResults(partialResults: Bundle?) {
-                if (partialResults?.firstText() != null) {
-                    debug("stt.onPartialResults")
+        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+        override fun onEndOfSpeech() {
+            debug("stt.onEndOfSpeech")
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            if (partialResults?.firstText() != null) {
+                debug("stt.onPartialResults")
+                if (lifecycle.shouldForwardPartial) {
                     _events.tryEmit(SpeechRecognitionEvent.Partial(partialResults.firstText()!!))
-                }
-            }
-
-            override fun onResults(results: Bundle?) {
-                val event = if (results?.firstText() != null) {
-                    debug("stt.onResults detectedLanguageTag=${detectedLanguageTag ?: "null"}")
-                    SpeechRecognitionEvent.Final(results.firstText()!!, detectedLanguageTag)
                 } else {
-                    debug("stt.onResults EMPTY -> NoMatch")
-                    SpeechRecognitionEvent.Error(
-                        SpeechRecognitionErrorReason.NoMatch,
-                        "Речь не распознана.",
-                    )
-                }
-                if (cancellationGate.shouldForward(event)) {
-                    _events.tryEmit(event)
-                } else {
-                    debug("stt.onResults STALE_CANCELLATION -> dropped")
+                    debug("stt.onPartialResults CANCELLED_ATTEMPT -> muted")
                 }
             }
+        }
 
-            override fun onLanguageDetection(results: Bundle) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    detectedLanguageTag = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
-                    debug("stt.onLanguageDetection detectedLanguageTag=$detectedLanguageTag")
-                }
-            }
-
-            override fun onError(error: Int) {
-                val event = errorMessage(error)
-                debug(
-                    "stt.onError code=$error reason=${event.reason} message=${event.message}",
+        override fun onResults(results: Bundle?) {
+            val event = if (results?.firstText() != null) {
+                debug("stt.onResults detectedLanguageTag=${detectedLanguageTag ?: "null"}")
+                SpeechRecognitionEvent.Final(results.firstText()!!, detectedLanguageTag)
+            } else {
+                debug("stt.onResults EMPTY -> NoMatch")
+                SpeechRecognitionEvent.Error(
+                    SpeechRecognitionErrorReason.NoMatch,
+                    "Речь не распознана.",
                 )
-                if (cancellationGate.shouldForward(event)) {
-                    _events.tryEmit(event)
-                } else {
-                    debug("stt.onError STALE_CANCELLATION -> dropped")
-                }
             }
+            onTerminal(event)
+        }
 
-            override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        })
+        override fun onLanguageDetection(results: Bundle) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                detectedLanguageTag = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
+                debug("stt.onLanguageDetection detectedLanguageTag=$detectedLanguageTag")
+            }
+        }
+
+        override fun onError(error: Int) {
+            val event = errorMessage(error)
+            debug(
+                "stt.onError code=$error reason=${event.reason} message=${event.message}",
+            )
+            onTerminal(event)
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
+    init {
+        recognizer = createRecognizer()
+    }
+
+    private fun createRecognizer(): SpeechRecognizer =
+        SpeechRecognizer.createSpeechRecognizer(appContext).apply {
+            setRecognitionListener(listener)
+        }
+
     override suspend fun startListening(request: RecognitionRequest) {
-        cancellationGate.markStarted()
+        lifecycleMutex.withLock {
+            val decision = withContext(Dispatchers.Main.immediate) { lifecycle.onStartRequested() }
+            when (decision) {
+                RecognitionAttemptAction.StartNow -> startOnRecognizer(request)
+                RecognitionAttemptAction.WaitForSettleThenStart -> {
+                    val timedOut = withContext(Dispatchers.Main.immediate) {
+                        beginCancellation()
+                        awaitSettled()
+                    }
+                    if (timedOut) {
+                        withContext(Dispatchers.Main.immediate) {
+                            recreateRecognizer()
+                            clearCancellation()
+                        }
+                    }
+                    withContext(Dispatchers.Main.immediate) {
+                        lifecycle.acknowledgeStart()
+                        startOnRecognizer(request)
+                    }
+                }
+            }
+        }
+    }
+
+    override fun cancel() {
+        mainHandler.post {
+            debug("stt.cancel lifecycle=${lifecycle.state}")
+            if (lifecycle.onCancelRequest()) {
+                beginCancellation()
+            } else {
+                debug("stt.cancel no active attempt -> best-effort cancel")
+                recognizer.cancel()
+            }
+        }
+    }
+
+    override fun release() {
+        scope.cancel()
+        mainHandler.post {
+            recognizer.destroy()
+            supportExecutor.shutdown()
+        }
+    }
+
+    /** Must run on the main thread. */
+    private fun beginCancellation() {
+        if (settleAck == null) {
+            settleAck = CompletableDeferred()
+            debug("stt.beginCancellation awaiting acknowledgement generation=${lifecycle.generation}")
+            recognizer.cancel()
+        } else {
+            debug("stt.beginCancellation already awaiting")
+        }
+    }
+
+    private suspend fun awaitSettled(): Boolean {
+        val ack = settleAck ?: return false
+        val settled = withTimeoutOrNull(CANCEL_SETTLE_TIMEOUT_MS.milliseconds) {
+            ack.await()
+        }
+        return settled == null
+    }
+
+    /** Must run on the main thread. */
+    private fun completeCancellation() {
+        settleAck?.complete(Unit)
+        settleAck = null
+        debug("stt.cancellationSettled")
+    }
+
+    /** Must run on the main thread. */
+    private fun clearCancellation() {
+        settleAck = null
+    }
+
+    /** Must run on the main thread. */
+    private fun recreateRecognizer() {
+        debug("stt.settleTimeout -> recreating recognizer generation=${lifecycle.generation}")
+        recognizer.destroy()
+        recognizer = createRecognizer()
+    }
+
+    private fun onTerminal(event: SpeechRecognitionEvent) {
+        if (lifecycle.onTerminalCallback()) {
+            _events.tryEmit(event)
+        } else {
+            debug("stt.onTerminal CANCELLED_ATTEMPT -> swallowed (cancellation acknowledgement)")
+            completeCancellation()
+        }
+    }
+
+    private suspend fun startOnRecognizer(request: RecognitionRequest) {
         detectedLanguageTag = null
-        val supportsDetection = detectionSupport()
+        val supportsDetection = withContext(Dispatchers.Main.immediate) { detectionSupport() }
         val languagePlan = request.toLanguagePlan(supportsDetection)
         debug(
             "stt.startListening languagePlan=${languagePlan.languageTag ?: "null"} " +
                 "enableDetection=${languagePlan.enableDetection} supportsDetection=$supportsDetection",
         )
-        try {
-            recognizer.startListening(recognitionIntent(languagePlan.languageTag, languagePlan.enableDetection))
-            debug("stt.startListening.success")
-        } catch (unexpected: RuntimeException) {
-            debug("stt.startListening.failure error=${unexpected.message ?: unexpected.javaClass.simpleName} -> fallbackAuto")
-            val fallbackPlan = request.toLanguagePlan(false)
-            recognizer.startListening(recognitionIntent(fallbackPlan.languageTag, enableDetection = false))
-            debug("stt.startListening.success (fallbackAuto language=${fallbackPlan.languageTag ?: "null"})")
+        withContext(Dispatchers.Main.immediate) {
+            try {
+                recognizer.startListening(recognitionIntent(languagePlan.languageTag, languagePlan.enableDetection))
+                debug("stt.startListening.success")
+            } catch (unexpected: RuntimeException) {
+                debug("stt.startListening.failure error=${unexpected.message ?: unexpected.javaClass.simpleName} -> fallbackAuto")
+                val fallbackPlan = request.toLanguagePlan(false)
+                recognizer.startListening(recognitionIntent(fallbackPlan.languageTag, enableDetection = false))
+                debug("stt.startListening.success (fallbackAuto language=${fallbackPlan.languageTag ?: "null"})")
+            }
         }
-    }
-
-    override fun cancel() {
-        cancellationGate.onCancel()
-        recognizer.cancel()
-    }
-
-    override fun release() {
-        recognizer.destroy()
-        supportExecutor.shutdown()
     }
 
     private fun recognitionIntent(languageTag: String?, enableDetection: Boolean): Intent =
@@ -150,9 +272,9 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
     private suspend fun detectionSupport(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
         detectionSupported?.let { return it }
-        val supported = runCatching {
-            withTimeout(DETECTION_PROBE_TIMEOUT_MS) {
-                suspendCancellableCoroutine { continuation ->
+        val supported = withTimeoutOrNull(DETECTION_PROBE_TIMEOUT_MS.milliseconds) {
+            suspendCancellableCoroutine<Boolean?> { continuation ->
+                mainHandler.post {
                     try {
                         recognizer.checkRecognitionSupport(
                             recognitionIntent(languageTag = null, enableDetection = true),
@@ -172,7 +294,7 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
                     }
                 }
             }
-        }.getOrDefault(false)
+        } ?: false
         detectionSupported = supported
         return supported
     }
@@ -207,7 +329,8 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
 
     private companion object {
         const val TAG = "Raya-STT"
-        const val DETECTION_PROBE_TIMEOUT_MS = 1_500L
+        const val DETECTION_PROBE_TIMEOUT_MS = 1_500
+        const val CANCEL_SETTLE_TIMEOUT_MS = 250
     }
 
     private inline fun debug(message: String) {
