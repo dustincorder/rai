@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.RayaApplication
 import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.BargeInMonitor
+import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaOrchestrator
 import com.dustincorder.rai.domain.RayaRoutingDiagnostics
@@ -26,6 +28,7 @@ class RayaViewModel(
     speechRecognition: SpeechRecognitionProvider,
     speechSynthesis: SpeechSynthesisProvider,
     replyProvider: ReplyProvider,
+    bargeInMonitor: BargeInMonitor? = null,
     routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
 ) : ViewModel() {
@@ -34,6 +37,7 @@ class RayaViewModel(
         speechRecognition = speechRecognition,
         speechSynthesis = speechSynthesis,
         replyProvider = replyProvider,
+        bargeInMonitor = bargeInMonitor,
         routingDiagnostics = routingDiagnostics,
         voiceDiagnostics = voiceDiagnostics,
     )
@@ -52,19 +56,21 @@ class RayaViewModel(
             orchestrator.interactionMode,
             orchestrator.voiceSessionActive,
             orchestrator.microphoneEnabled,
-        ) { interactionMode, voiceSessionActive, microphoneEnabled ->
-            Triple(interactionMode, voiceSessionActive, microphoneEnabled)
+            orchestrator.streamingText,
+        ) { interactionMode, voiceSessionActive, microphoneEnabled, streamingText ->
+            SessionFlux(interactionMode, voiceSessionActive, microphoneEnabled, streamingText)
         },
     ) { chat, session ->
         rayaUiStateFor(
             state = chat.state,
             recognizedText = chat.userText,
             conversation = chat.conversation,
-            interactionMode = session.first,
-            voiceSessionActive = session.second,
-            microphoneEnabled = session.third,
+            interactionMode = session.interactionMode,
+            voiceSessionActive = session.voiceSessionActive,
+            microphoneEnabled = session.microphoneEnabled,
             semanticEmotion = chat.semanticEmotion,
             userTurnRevision = chat.userTurnRevision,
+            streamingText = session.streamingText,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RayaUiState())
 
@@ -74,6 +80,13 @@ class RayaViewModel(
         val conversation: List<ConversationMessage>,
         val semanticEmotion: RayaEmotion,
         val userTurnRevision: Long,
+    )
+
+    private data class SessionFlux(
+        val interactionMode: InteractionMode,
+        val voiceSessionActive: Boolean,
+        val microphoneEnabled: Boolean,
+        val streamingText: String,
     )
 
     fun submitText(text: String) = orchestrator.submitText(text)
@@ -95,8 +108,9 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(RayaViewModel::class.java))
         return RayaViewModel(
-            speechRecognition = AndroidSpeechRecognitionProvider(application),
-            speechSynthesis = AndroidSpeechSynthesisProvider(application),
+            speechRecognition = application.runtimeSpeechRecognitionProvider(),
+            speechSynthesis = application.runtimeSpeechSynthesisProvider(),
+            bargeInMonitor = application.bargeInMonitor,
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
             voiceDiagnostics = AndroidRayaVoiceDiagnostics(),

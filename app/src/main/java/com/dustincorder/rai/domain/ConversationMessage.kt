@@ -8,6 +8,7 @@ enum class ConversationRole {
 
 data class ConversationMessage(
     val role: ConversationRole,
-    val text: String,
+    val text: String = "",
     val contextText: String = text,
+    val noticeCode: RayaNoticeCode? = null,
 )

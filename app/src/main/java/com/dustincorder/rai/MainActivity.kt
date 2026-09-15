@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
             ) { granted ->
                 hasMicrophonePermission = granted
                 if (granted) rayaViewModel.startVoiceSession()
-                else rayaViewModel.showError("Разрешение на микрофон не предоставлено.")
+                else rayaViewModel.showError(getString(com.dustincorder.rai.R.string.microphone_permission_denied))
             }
 
             BackHandler(enabled = showSettings) { showSettings = false }

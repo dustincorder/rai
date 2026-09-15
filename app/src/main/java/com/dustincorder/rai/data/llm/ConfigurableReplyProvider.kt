@@ -10,9 +10,13 @@ import com.dustincorder.rai.data.settings.normalizeBaseUrl
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.RayaResponse
+import com.dustincorder.rai.domain.ReplyEvent
 import com.dustincorder.rai.domain.ReplyProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
@@ -21,6 +25,7 @@ class ConfigurableReplyProvider(
     private val apiKeyStore: ApiKeyStore,
     private val openAi: OpenAiCompatibleReplyProvider,
     private val anthropic: AnthropicCompatibleReplyProvider,
+    private val gemini: GeminiReplyProvider,
     private val systemPrompt: () -> String,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : ReplyProvider {
@@ -31,7 +36,8 @@ class ConfigurableReplyProvider(
         return try {
             requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
             val apiKey = apiKeyStore.read(settings.provider)
-            if (settings.modelId.isBlank() || settings.baseUrl.isBlank()) {
+            val modelId = settings.resolvedModelId()
+            if (modelId.isBlank() || settings.baseUrl.isBlank()) {
                 throw LlmConfigurationException("Настрой LLM-провайдера.")
             }
             if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
@@ -42,10 +48,51 @@ class ConfigurableReplyProvider(
                 if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
             }
             val raw = when (settings.protocol) {
-                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
-                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
+                LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, modelId, apiKey, prompt, messages)
+                LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, modelId, apiKey, prompt, messages)
+                LlmProtocol.Gemini -> gemini.reply(settings.baseUrl, modelId, apiKey, prompt, messages)
             }
             parseRayaResponse(raw, json)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            logDiagnostics(failure, config)
+            throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
+        }
+    }
+
+    override fun streamReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+    ): Flow<ReplyEvent> = flow {
+        if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
+        val settings = settingsRepository.settings.first()
+        val config = settings.connectionConfig()
+        try {
+            requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
+            val apiKey = apiKeyStore.read(settings.provider)
+            val modelId = settings.resolvedModelId()
+            if (modelId.isBlank() || settings.baseUrl.isBlank()) {
+                throw LlmConfigurationException("Настрой LLM-провайдера.")
+            }
+            if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
+                throw LlmSafeException("API key не сохранён.")
+            }
+            val prompt = buildString {
+                append(systemPrompt())
+                if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
+            }
+            val raw: Flow<String> = when (settings.protocol) {
+                LlmProtocol.OpenAiCompatible ->
+                    openAi.streamRaw(settings.baseUrl, modelId, apiKey, prompt, messages)
+                LlmProtocol.Gemini ->
+                    gemini.streamRaw(settings.baseUrl, modelId, apiKey, prompt, messages)
+                // TODO: picks up real Anthropic SSE streaming; adapts non-streaming for now.
+                LlmProtocol.AnthropicCompatible -> flow {
+                    emit(anthropic.reply(settings.baseUrl, modelId, apiKey, prompt, messages))
+                }
+            }
+            emitAll(raw.toReplyEvents(json))
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
@@ -69,6 +116,7 @@ class ConfigurableReplyProvider(
             when (config.protocol) {
                 LlmProtocol.OpenAiCompatible -> openAi.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
                 LlmProtocol.AnthropicCompatible -> anthropic.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
+                LlmProtocol.Gemini -> gemini.reply(config.baseUrl, config.modelId, effectiveKey, probePrompt, probe)
             }
             LlmConnectionResult.Success
         } catch (cancellation: CancellationException) {

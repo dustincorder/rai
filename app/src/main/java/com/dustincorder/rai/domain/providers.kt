@@ -1,6 +1,7 @@
 package com.dustincorder.rai.domain
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import java.util.Locale
 
 sealed interface SpeechRecognitionEvent {
@@ -25,6 +26,22 @@ interface SpeechRecognitionProvider {
     fun release()
 }
 
+/** Optional acoustic monitor used only while TTS is speaking. */
+interface BargeInMonitor {
+    fun start(onConfirmedSpeech: (BargeInHandoff) -> Unit)
+    fun stop()
+}
+
+data class BargeInHandoff(
+    val pcm16: ByteArray,
+    val sampleRateHz: Int,
+    val channels: Int = 1,
+)
+
+interface HandoffSpeechRecognitionProvider {
+    suspend fun startListening(request: RecognitionRequest, handoff: BargeInHandoff)
+}
+
 interface SpeechSynthesisProvider {
     suspend fun speak(text: String, locale: Locale = Locale("ru", "RU"))
     fun stop()
@@ -33,6 +50,27 @@ interface SpeechSynthesisProvider {
 
 interface ReplyProvider {
     suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse
+
+    /**
+     * Streams visible answer text as it arrives, then commits the final validated
+     * [RayaResponse]. Failures surface as flow exceptions. Defaults to a single
+     * [ReplyEvent.Completed] for non-streaming transports.
+     */
+    fun streamReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+    ): Flow<ReplyEvent> = flow {
+        emit(ReplyEvent.Completed(reply(messages, languageTag)))
+    }
+}
+
+/**
+ * Domain stream contract. Only visible answer text ever reaches the UI;
+ * emotion/language metadata is committed once via [Completed].
+ */
+sealed interface ReplyEvent {
+    data class TextDelta(val text: String) : ReplyEvent
+    data class Completed(val response: RayaResponse) : ReplyEvent
 }
 
 class MockReplyProvider : ReplyProvider {

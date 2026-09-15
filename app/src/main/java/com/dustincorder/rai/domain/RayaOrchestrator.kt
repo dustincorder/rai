@@ -1,5 +1,6 @@
 package com.dustincorder.rai.domain
 
+import com.dustincorder.rai.domain.ReplyEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +40,7 @@ class RayaOrchestrator(
     private val speechRecognition: SpeechRecognitionProvider,
     private val speechSynthesis: SpeechSynthesisProvider,
     private val replyProvider: ReplyProvider,
+    private val bargeInMonitor: BargeInMonitor? = null,
     private val systemLanguageTag: () -> String = { Locale.getDefault().toLanguageTag() },
     private val routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     private val voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
@@ -72,6 +74,9 @@ class RayaOrchestrator(
     private val _userTurnRevision = MutableStateFlow(0L)
     val userTurnRevision: StateFlow<Long> = _userTurnRevision.asStateFlow()
 
+    private val _streamingText = MutableStateFlow("")
+    val streamingText: StateFlow<String> = _streamingText.asStateFlow()
+
     private var sessionJob: Job? = null
     private var activeTurnJob: Job? = null
     private var turnEpoch = 0
@@ -102,20 +107,24 @@ class RayaOrchestrator(
             try {
                 _conversation.value = appendMessage(ConversationMessage(ConversationRole.User, clean))
                 _state.value = RayaState.Thinking
+                _streamingText.value = ""
                 try {
-                    val response = replyProvider.reply(conversationContext(), languageTag)
+                    val response = collectReply(conversationContext(), languageTag)
                     if (_voiceSessionActive.value) return@launch
                     if (!textTurnInFlight) return@launch
                     _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
                     _semanticEmotion.value = response.emotion
+                    _streamingText.value = ""
                     _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
                     _state.value = RayaState.Idle
                 } catch (cancellation: CancellationException) {
                     throw cancellation
                 } catch (failure: Throwable) {
                     if (textTurnInFlight) {
+                        _streamingText.value = ""
                         _state.value = RayaState.Error(
-                            failure.message ?: "Не удалось получить ответ.",
+                            failure.message.orEmpty(),
+                            RayaErrorCode.ReplyUnavailable,
                         )
                     }
                 }
@@ -123,6 +132,70 @@ class RayaOrchestrator(
                 textTurnInFlight = false
             }
         }
+    }
+
+    /**
+     * Collects a reply stream for a text turn. Returns the final validated response.
+     * Stale collectors (turn superseded) abort via [StaleTurn].
+     */
+    private suspend fun collectReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+    ): RayaResponse {
+        var result: RayaResponse? = null
+        var firstToken = true
+        val startedAt = now()
+        replyProvider.streamReply(messages, languageTag).collect { event ->
+            when (event) {
+                is ReplyEvent.TextDelta -> {
+                    if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                    if (firstToken) {
+                        firstToken = false
+                        record("llm.firstTokenMs=${now() - startedAt}")
+                    }
+                    _streamingText.value += event.text
+                }
+                is ReplyEvent.Completed -> {
+                    if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                    result = event.response
+                }
+            }
+        }
+        return result ?: throw StaleTurn()
+    }
+
+    /** Aborts a superseded streaming collector without surfacing an error. */
+    private class StaleTurn : CancellationException()
+
+    /**
+     * Collects a reply stream for a voice turn. Stale epochs abort via [StaleTurn]
+     * so late deltas can never append to a newer turn.
+     */
+    private suspend fun collectVoiceReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+        epoch: Int,
+    ): RayaResponse {
+        var result: RayaResponse? = null
+        var firstToken = true
+        val startedAt = now()
+        replyProvider.streamReply(messages, languageTag).collect { event ->
+            when (event) {
+                is ReplyEvent.TextDelta -> {
+                    if (isStaleEpoch(epoch, "replyDelta")) throw StaleTurn()
+                    if (firstToken) {
+                        firstToken = false
+                        record("voice.llmFirstTokenMs=${now() - startedAt} epoch=$epoch")
+                    }
+                    _streamingText.value += event.text
+                }
+                is ReplyEvent.Completed -> {
+                    if (isStaleEpoch(epoch, "reply")) throw StaleTurn()
+                    result = event.response
+                }
+            }
+        }
+        return result ?: throw StaleTurn()
     }
 
     fun startVoiceSession() {
@@ -223,7 +296,11 @@ class RayaOrchestrator(
         speechSynthesis.shutdown()
     }
 
-    private fun beginVoiceTurn(resetActivity: Boolean, explicitIntent: Boolean = false) {
+    private fun beginVoiceTurn(
+        resetActivity: Boolean,
+        explicitIntent: Boolean = false,
+        handoff: BargeInHandoff? = null,
+    ) {
         if (sessionJob?.isActive != true) return
         val parent = sessionJob ?: return
         if (explicitIntent) markUserTurnIntent()
@@ -236,11 +313,11 @@ class RayaOrchestrator(
                 "voiceSessionActive=${_voiceSessionActive.value} microphoneEnabled=${_microphoneEnabled.value}",
         )
         activeTurnJob = scope.launch(parent) {
-            runVoiceTurn(epoch)
+            runVoiceTurn(epoch, handoff)
         }
     }
 
-    private suspend fun CoroutineScope.runVoiceTurn(epoch: Int) {
+    private suspend fun CoroutineScope.runVoiceTurn(epoch: Int, handoff: BargeInHandoff? = null) {
         val finalResult = CompletableDeferred<SpeechRecognitionEvent.Final>()
         _state.value = RayaState.Listening
         _userText.value = ""
@@ -274,12 +351,15 @@ class RayaOrchestrator(
         }
         yield()
         try {
-            speechRecognition.startListening(
-                RecognitionRequest(
-                    language = ConversationLanguage.Auto,
-                    systemLanguageTag = systemLanguageTag(),
-                ),
+            val request = RecognitionRequest(
+                language = ConversationLanguage.Auto,
+                systemLanguageTag = systemLanguageTag(),
             )
+            if (handoff != null && speechRecognition is HandoffSpeechRecognitionProvider) {
+                speechRecognition.startListening(request, handoff)
+            } else {
+                speechRecognition.startListening(request)
+            }
             record("voice.turnListeningStarted epoch=$epoch")
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -287,7 +367,7 @@ class RayaOrchestrator(
             collector.cancel()
             record("voice.startListeningFailure epoch=$epoch class=${failure::class.java.simpleName}")
             if (isStaleEpoch(epoch, "startListening")) return
-            failVoiceSession("Сбой инициализации распознавания речи.")
+            failVoiceSession(code = RayaErrorCode.RecognitionStartFailed)
             return
         }
         try {
@@ -309,7 +389,7 @@ class RayaOrchestrator(
                         _state.value = RayaState.Idle
                     }
                 }
-                else -> failVoiceSession(failure.message ?: "Сбой распознавания речи.")
+                else -> failVoiceSession(failure.message.orEmpty(), RayaErrorCode.RecognitionFailed)
             }
         }
     }
@@ -351,21 +431,35 @@ class RayaOrchestrator(
             if (localResponse) {
                 localNameResponse(resolvedLanguageTag)
             } else {
-                replyProvider.reply(conversationContext(), resolvedLanguageTag)
+                _streamingText.value = ""
+                collectVoiceReply(conversationContext(), resolvedLanguageTag, epoch)
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
             if (isStaleEpoch(epoch, "reply")) return
-            failVoiceSession(failure.message ?: "Голосовой pipeline завершился с ошибкой.")
+            failVoiceSession(failure.message.orEmpty(), RayaErrorCode.VoicePipelineFailed)
             return
         }
 
         if (isStaleEpoch(epoch, "highlight")) return
         _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
         _semanticEmotion.value = response.emotion
+        _streamingText.value = ""
         _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
         _state.value = RayaState.Speaking(response.text)
+        bargeInMonitor?.start barge@{ handoff ->
+            val parent = sessionJob ?: return@barge
+            scope.launch(parent) {
+                if (_state.value !is RayaState.Speaking) return@launch
+                record("voice.bargeIn confirmed")
+                speechSynthesis.stop()
+                activeTurnJob?.cancel()
+                _streamingText.value = ""
+                _state.value = RayaState.Listening
+                beginVoiceTurn(resetActivity = true, handoff = handoff)
+            }
+        }
 
         val ttsLanguageTag = response.languageTag
             ?.takeIf { it.isValidLanguageTag() }
@@ -381,18 +475,21 @@ class RayaOrchestrator(
         currentCoroutineContext().ensureActive()
         val speakFailure = outcome.exceptionOrNull()
         if (speakFailure is CancellationException) {
+            bargeInMonitor?.stop()
             _state.value = RayaState.Idle
             return
         }
         speakFailure?.let { failure ->
-            failVoiceSession(failure.message ?: "Голосовой pipeline завершился с ошибкой.")
+            failVoiceSession(failure.message.orEmpty(), RayaErrorCode.VoicePipelineFailed)
             return
         }
 
         if (!_voiceSessionActive.value || !_microphoneEnabled.value) {
+            bargeInMonitor?.stop()
             _state.value = RayaState.Idle
             return
         }
+        bargeInMonitor?.stop()
         beginVoiceTurn(resetActivity = true)
     }
 
@@ -426,12 +523,14 @@ class RayaOrchestrator(
         sessionJob?.cancel()
         sessionJob = null
         speechRecognition.cancel()
+        bargeInMonitor?.stop()
         speechSynthesis.stop()
         _voiceSessionActive.value = false
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Text
         _semanticEmotion.value = RayaEmotion.Calm
         _lastResponseLanguageTag.value = null
+        _streamingText.value = ""
         _state.value = RayaState.Idle
         if (wasActive) {
             record(
@@ -441,15 +540,15 @@ class RayaOrchestrator(
         }
         if (notice) {
             _conversation.value = appendMessage(
-                ConversationMessage(ConversationRole.Notice, "Голосовой чат завершён из-за неактивности."),
+                ConversationMessage(ConversationRole.Notice, noticeCode = RayaNoticeCode.InactivityEnded),
             )
         }
     }
 
-    private fun failVoiceSession(message: String) {
+    private fun failVoiceSession(message: String = "", code: RayaErrorCode? = null) {
         record("voice.fatalSessionFailure error=$message")
         endVoiceSessionInternal(notice = false, reason = "fatal($message)")
-        _state.value = RayaState.Error(message)
+        _state.value = RayaState.Error(message, code)
     }
 
     private fun appendMessage(message: ConversationMessage): List<ConversationMessage> =
@@ -466,6 +565,5 @@ class RayaOrchestrator(
         const val USER_INACTIVITY_TIMEOUT_MS = 3 * 60 * 1000L
         const val INTERRUPT_TTS_STOP_DELAY_MS = 300L
         const val INACTIVITY_CHECK_INTERVAL_MS = 1_000L
-        const val INACTIVITY_NOTICE_MESSAGE = "Голосовой чат завершён из-за неактивности."
     }
 }

@@ -1,10 +1,16 @@
 package com.dustincorder.rai.data.settings
 
 import com.dustincorder.rai.domain.ConversationLanguage
+import com.dustincorder.rai.domain.TtsEngine
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-enum class LlmProtocol { OpenAiCompatible, AnthropicCompatible }
+enum class LlmProtocol { OpenAiCompatible, AnthropicCompatible, Gemini }
+
+enum class SttEngine {
+    GroqWhisper,
+    System,
+}
 
 enum class LlmProviderPreset(
     val protocol: LlmProtocol,
@@ -15,6 +21,7 @@ enum class LlmProviderPreset(
     OpenAI(LlmProtocol.OpenAiCompatible, "https://api.openai.com/v1", "gpt-4o-mini"),
     Groq(LlmProtocol.OpenAiCompatible, "https://api.groq.com/openai/v1", "openai/gpt-oss-20b"),
     Anthropic(LlmProtocol.AnthropicCompatible, "https://api.anthropic.com/v1", "claude-sonnet-5"),
+    Gemini(LlmProtocol.Gemini, "https://generativelanguage.googleapis.com/v1beta", "gemini-2.0-flash"),
     Custom(LlmProtocol.OpenAiCompatible, "", "", false),
 }
 
@@ -23,11 +30,19 @@ data class AppSettings(
     val customProtocol: LlmProtocol = LlmProtocol.OpenAiCompatible,
     val customBaseUrl: String = "",
     val modelId: String = LlmProviderPreset.OpenAI.defaultModel,
+    val useCustomModel: Boolean = false,
+    val customModelId: String = "",
+    val sttModelId: String = "whisper-large-v3-turbo",
+    val sttEngine: SttEngine = SttEngine.GroqWhisper,
+    val ttsEngine: TtsEngine = TtsEngine.System,
     val conversationLanguage: ConversationLanguage = ConversationLanguage.Auto,
     val customAllowInsecureHttp: Boolean = false,
 ) {
     val protocol: LlmProtocol get() = if (provider == LlmProviderPreset.Custom) customProtocol else provider.protocol
     val baseUrl: String get() = if (provider == LlmProviderPreset.Custom) customBaseUrl else provider.baseUrl
+
+    /** Effective model id: free-text custom id when "Custom Model" is selected. */
+    fun resolvedModelId(): String = if (useCustomModel) customModelId.ifBlank { modelId } else modelId
 }
 
 fun normalizeBaseUrl(value: String): String {

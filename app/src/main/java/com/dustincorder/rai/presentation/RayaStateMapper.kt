@@ -1,5 +1,6 @@
 package com.dustincorder.rai.presentation
 
+import com.dustincorder.rai.R
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaEmotion
@@ -50,6 +51,7 @@ fun rayaUiStateFor(
     microphoneEnabled: Boolean = true,
     semanticEmotion: RayaEmotion = RayaEmotion.Calm,
     userTurnRevision: Long = 0L,
+    streamingText: String = "",
 ): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
         face = RayaFaceState(
@@ -61,6 +63,7 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     RayaState.Listening -> RayaUiState(
         face = RayaFaceState(
@@ -68,6 +71,7 @@ fun rayaUiStateFor(
             gaze = RayaGaze.Alert,
         ),
         status = "Слушаю",
+        statusResId = R.string.status_listening,
         userText = recognizedText,
         conversation = conversation,
         isBusy = true,
@@ -75,19 +79,22 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     RayaState.Thinking -> RayaUiState(
         face = RayaFaceState(
             emotion = RayaFaceEmotion.Thinking,
             gaze = RayaGaze.Up,
         ),
-        status = "Размышляю",
+        status = if (streamingText.isBlank()) "Размышляю" else "Отвечаю",
+        statusResId = if (streamingText.isBlank()) R.string.status_thinking else R.string.status_answering,
         conversation = conversation,
         isBusy = true,
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     is RayaState.Speaking -> RayaUiState(
         face = RayaFaceState(
@@ -96,6 +103,7 @@ fun rayaUiStateFor(
             speaking = true,
         ),
         status = "Говорю",
+        statusResId = R.string.status_speaking,
         conversation = conversation,
         isBusy = true,
         isSpeaking = true,
@@ -103,6 +111,7 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     is RayaState.Error -> RayaUiState(
         face = RayaFaceState(
@@ -110,11 +119,14 @@ fun rayaUiStateFor(
             gaze = RayaGaze.Wide,
         ),
         status = "Сбой системы",
+        statusResId = R.string.status_error,
         conversation = conversation,
         errorMessage = state.message,
+        errorCode = state.code,
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
 }

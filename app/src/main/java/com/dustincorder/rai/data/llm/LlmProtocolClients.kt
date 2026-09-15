@@ -3,6 +3,9 @@ package com.dustincorder.rai.data.llm
 import com.dustincorder.rai.data.settings.resolveEndpointUrl
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -47,6 +50,40 @@ class OpenAiCompatibleReplyProvider(
         return json.decodeFromString<OpenAiResponse>(response).choices.firstOrNull()?.message?.content
             ?.takeIf { it.isNotBlank() }
             ?: error("Провайдер вернул пустой ответ.")
+    }
+
+    /** Streams raw SSE content chunks for [ReplyStreaming.toReplyEvents]. */
+    fun streamRaw(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        systemPrompt: String,
+        messages: List<ConversationMessage>,
+    ): Flow<String> {
+        val body = json.encodeToString(
+            OpenAiRequest(
+                model,
+                buildList {
+                    add(OpenAiMessage("system", systemPrompt))
+                    messages.forEach { message -> add(OpenAiMessage(message.role.transport, message.contextText)) }
+                },
+                stream = true,
+            ),
+        )
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("chat", "completions")))
+            .post(body.toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "text/event-stream")
+            .apply { if (!apiKey.isNullOrBlank()) header("Authorization", "Bearer $apiKey") }
+            .build()
+        return client.streamPostLines(request, json).mapNotNull { payload ->
+            runCatching {
+                json.decodeFromString<OpenAiStreamResponse>(payload)
+                    .choices.firstOrNull()?.delta?.content
+                    ?: json.decodeFromString<OpenAiResponse>(payload)
+                        .choices.firstOrNull()?.message?.content
+            }.getOrNull()
+        }.filter { it.isNotEmpty() }
     }
 }
 
