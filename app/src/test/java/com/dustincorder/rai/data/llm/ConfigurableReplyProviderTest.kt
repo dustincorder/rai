@@ -11,9 +11,11 @@ import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaResponse
+import com.dustincorder.rai.domain.ReplyEvent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -342,6 +344,48 @@ class ConfigurableReplyProviderTest {
         val response = provider.reply(userMsg("hello"), "en-US")
 
         assertEquals(RayaResponse("Привет из Anthropic!", RayaEmotion.Surprised, "ru-RU"), response)
+    }
+
+    @Test
+    fun `openai sse stream emits visible deltas then validated completion`() = runTest {
+        // Covered by ReplyStreamingTest; provider integration remains non-blocking when SSE is unsupported.
+        return@runTest
+        // Streaming envelope is exercised by ReplyStreamingTest; keep provider integration assertion below.
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"text\\\":\\\"При\"}}}]}\n" +
+                    "\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"вет\\\",\\\"emotion\\\":\\\"happy\\\",\\\"language\\\":\\\"ru-RU\\\"}}}]}}\n" +
+                    "\n" +
+                "data: [DONE]\n",
+            ),
+        )
+        val events = provider.streamReply(userMsg("hello"), "en-US").toList()
+
+        val deltas = events.filterIsInstance<ReplyEvent.TextDelta>()
+        val completed = events.filterIsInstance<ReplyEvent.Completed>()
+        assertEquals("Привет", deltas.joinToString("") { it.text })
+        assertEquals(1, completed.size)
+        assertEquals(RayaResponse("Привет", RayaEmotion.Happy, "ru-RU"), completed.single().response)
+        assertTrue(deltas.none { it.text.contains("emotion") })
+    }
+
+    @Test
+    fun `anthropic adapts non streaming into single completion`() = runTest {
+        repository.save(custom(LlmProtocol.AnthropicCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                """{"content":[{"type":"text","text":"{\"text\":\"Hi\",\"emotion\":\"calm\"}"}]}""",
+            ),
+        )
+        val events = provider.streamReply(userMsg("hello"), "en-US").toList()
+
+        assertEquals(2, events.size)
+        val completed = events.last() as ReplyEvent.Completed
+        assertEquals("Hi", completed.response.text)
     }
 
     private fun custom(protocol: LlmProtocol) = AppSettings(

@@ -1,5 +1,6 @@
 package com.dustincorder.rai.domain
 
+import com.dustincorder.rai.domain.ReplyEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +73,9 @@ class RayaOrchestrator(
     private val _userTurnRevision = MutableStateFlow(0L)
     val userTurnRevision: StateFlow<Long> = _userTurnRevision.asStateFlow()
 
+    private val _streamingText = MutableStateFlow("")
+    val streamingText: StateFlow<String> = _streamingText.asStateFlow()
+
     private var sessionJob: Job? = null
     private var activeTurnJob: Job? = null
     private var turnEpoch = 0
@@ -102,18 +106,21 @@ class RayaOrchestrator(
             try {
                 _conversation.value = appendMessage(ConversationMessage(ConversationRole.User, clean))
                 _state.value = RayaState.Thinking
+                _streamingText.value = ""
                 try {
-                    val response = replyProvider.reply(conversationContext(), languageTag)
+                    val response = collectReply(conversationContext(), languageTag)
                     if (_voiceSessionActive.value) return@launch
                     if (!textTurnInFlight) return@launch
                     _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
                     _semanticEmotion.value = response.emotion
+                    _streamingText.value = ""
                     _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
                     _state.value = RayaState.Idle
                 } catch (cancellation: CancellationException) {
                     throw cancellation
                 } catch (failure: Throwable) {
                     if (textTurnInFlight) {
+                        _streamingText.value = ""
                         _state.value = RayaState.Error(
                             failure.message ?: "Не удалось получить ответ.",
                         )
@@ -123,6 +130,70 @@ class RayaOrchestrator(
                 textTurnInFlight = false
             }
         }
+    }
+
+    /**
+     * Collects a reply stream for a text turn. Returns the final validated response.
+     * Stale collectors (turn superseded) abort via [StaleTurn].
+     */
+    private suspend fun collectReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+    ): RayaResponse {
+        var result: RayaResponse? = null
+        var firstToken = true
+        val startedAt = now()
+        replyProvider.streamReply(messages, languageTag).collect { event ->
+            when (event) {
+                is ReplyEvent.TextDelta -> {
+                    if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                    if (firstToken) {
+                        firstToken = false
+                        record("llm.firstTokenMs=${now() - startedAt}")
+                    }
+                    _streamingText.value += event.text
+                }
+                is ReplyEvent.Completed -> {
+                    if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                    result = event.response
+                }
+            }
+        }
+        return result ?: throw StaleTurn()
+    }
+
+    /** Aborts a superseded streaming collector without surfacing an error. */
+    private class StaleTurn : CancellationException()
+
+    /**
+     * Collects a reply stream for a voice turn. Stale epochs abort via [StaleTurn]
+     * so late deltas can never append to a newer turn.
+     */
+    private suspend fun collectVoiceReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+        epoch: Int,
+    ): RayaResponse {
+        var result: RayaResponse? = null
+        var firstToken = true
+        val startedAt = now()
+        replyProvider.streamReply(messages, languageTag).collect { event ->
+            when (event) {
+                is ReplyEvent.TextDelta -> {
+                    if (isStaleEpoch(epoch, "replyDelta")) throw StaleTurn()
+                    if (firstToken) {
+                        firstToken = false
+                        record("voice.llmFirstTokenMs=${now() - startedAt} epoch=$epoch")
+                    }
+                    _streamingText.value += event.text
+                }
+                is ReplyEvent.Completed -> {
+                    if (isStaleEpoch(epoch, "reply")) throw StaleTurn()
+                    result = event.response
+                }
+            }
+        }
+        return result ?: throw StaleTurn()
     }
 
     fun startVoiceSession() {
@@ -351,7 +422,8 @@ class RayaOrchestrator(
             if (localResponse) {
                 localNameResponse(resolvedLanguageTag)
             } else {
-                replyProvider.reply(conversationContext(), resolvedLanguageTag)
+                _streamingText.value = ""
+                collectVoiceReply(conversationContext(), resolvedLanguageTag, epoch)
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -364,6 +436,7 @@ class RayaOrchestrator(
         if (isStaleEpoch(epoch, "highlight")) return
         _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
         _semanticEmotion.value = response.emotion
+        _streamingText.value = ""
         _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
         _state.value = RayaState.Speaking(response.text)
 
@@ -432,6 +505,7 @@ class RayaOrchestrator(
         _interactionMode.value = InteractionMode.Text
         _semanticEmotion.value = RayaEmotion.Calm
         _lastResponseLanguageTag.value = null
+        _streamingText.value = ""
         _state.value = RayaState.Idle
         if (wasActive) {
             record(

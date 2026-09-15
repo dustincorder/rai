@@ -5,9 +5,12 @@ import kotlinx.serialization.Serializable
 import java.io.IOException
 
 @Serializable data class OpenAiMessage(val role: String, val content: String)
-@Serializable data class OpenAiRequest(val model: String, val messages: List<OpenAiMessage>)
+@Serializable data class OpenAiRequest(val model: String, val messages: List<OpenAiMessage>, val stream: Boolean = false)
 @Serializable data class OpenAiResponse(val choices: List<OpenAiChoice> = emptyList())
 @Serializable data class OpenAiChoice(val message: OpenAiMessage)
+@Serializable data class OpenAiStreamResponse(val choices: List<OpenAiStreamChoice> = emptyList())
+@Serializable data class OpenAiStreamChoice(val delta: OpenAiDelta = OpenAiDelta())
+@Serializable data class OpenAiDelta(val content: String? = null)
 
 @Serializable data class AnthropicRequest(
     val model: String,

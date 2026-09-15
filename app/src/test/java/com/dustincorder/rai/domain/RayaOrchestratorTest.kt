@@ -2,8 +2,10 @@ package com.dustincorder.rai.domain
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -1494,6 +1496,82 @@ class RayaOrchestratorTest {
         orchestrator.endVoiceSession()
         runCurrent()
     }
+
+    @Test
+    fun `streamed text reply accumulates then commits the exact final message`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(
+            streamScript = listOf(
+                ReplyEvent.TextDelta("При"),
+                ReplyEvent.TextDelta("вет!"),
+                ReplyEvent.Completed(RayaResponse("Привет!", RayaEmotion.Happy, "ru-RU")),
+            ),
+        )
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.submitText("Привет")
+        runCurrent()
+
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertEquals("", orchestrator.streamingText.value)
+        assertEquals(
+            listOf(
+                ConversationMessage(ConversationRole.User, "Привет"),
+                ConversationMessage(ConversationRole.Assistant, "Привет!"),
+            ),
+            orchestrator.conversation.value,
+        )
+        assertEquals(RayaEmotion.Happy, orchestrator.semanticEmotion.value)
+        assertEquals(0, synthesis.speakCount)
+    }
+
+    @Test
+    fun `streaming failure surfaces error without partial assistant message`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(fail = true)
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.submitText("Привет")
+        runCurrent()
+
+        assertTrue(orchestrator.state.value is RayaState.Error)
+        assertEquals("", orchestrator.streamingText.value)
+        assertEquals(1, orchestrator.conversation.value.size)
+    }
+
+    @Test
+    fun `ending voice session during streaming drops stale deltas`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider()
+        val channel = Channel<ReplyEvent>(Channel.UNLIMITED)
+        reply.streamChannel = channel
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("вопрос", "ru-RU"))
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+
+        channel.trySend(ReplyEvent.TextDelta("часть"))
+        runCurrent()
+        assertEquals("часть", orchestrator.streamingText.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+        channel.trySend(ReplyEvent.TextDelta("поздняя"))
+        channel.trySend(ReplyEvent.Completed(RayaResponse("Ответ", RayaEmotion.Happy, "ru-RU")))
+        channel.close()
+        runCurrent()
+
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertFalse(orchestrator.conversation.value.any { it.role == ConversationRole.Assistant })
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
 }
 
 private class FakeRecognitionProvider : SpeechRecognitionProvider {
@@ -1614,10 +1692,13 @@ private class FakeReplyProvider(
     private val waitForReply: Boolean = false,
     private val fail: Boolean = false,
     responses: MutableList<String> = mutableListOf("Я тебя слышу."),
+    var streamScript: List<ReplyEvent>? = null,
+    var streamChannel: Channel<ReplyEvent>? = null,
 ) : ReplyProvider {
     private val responseQueue = ArrayDeque(responses.map { RayaResponse(it, RayaEmotion.Calm, null) })
     private val pending = Channel<RayaResponse>(Channel.UNLIMITED)
     var callCount = 0
+    var streamCallCount = 0
     var lastMessages: List<ConversationMessage>? = null
     var lastLanguageTag: String? = null
 
@@ -1627,6 +1708,27 @@ private class FakeReplyProvider(
         lastLanguageTag = languageTag
         if (fail) throw RuntimeException("LLM failure")
         return if (waitForReply) pending.receive() else responseQueue.removeFirst()
+    }
+
+    override fun streamReply(
+        messages: List<ConversationMessage>,
+        languageTag: String?,
+    ): Flow<ReplyEvent> = flow {
+        streamCallCount++
+        lastMessages = messages
+        lastLanguageTag = languageTag
+        if (fail) throw RuntimeException("LLM failure")
+        val channel = streamChannel
+        if (channel != null && streamCallCount == 1) {
+            for (event in channel) emit(event)
+            return@flow
+        }
+        val script = streamScript
+        if (script != null) {
+            script.forEach { emit(it) }
+        } else {
+            emit(ReplyEvent.Completed(reply(messages, languageTag)))
+        }
     }
 
     fun complete(structured: RayaResponse? = null) {

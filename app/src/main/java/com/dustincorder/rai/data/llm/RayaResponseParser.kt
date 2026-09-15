@@ -47,7 +47,7 @@ fun parseRayaResponse(raw: String, json: Json = RAYA_STRUCTURED_JSON): RayaRespo
 }
 
 /** Removes a leading ``` or ```json fence and the trailing ``` guard if present. */
-private fun stripMarkdownFence(input: String): String {
+internal fun stripMarkdownFence(input: String): String {
     val trimmed = input.trim()
     val firstNewline = trimmed.indexOf('\n')
     val firstLine = if (firstNewline >= 0) trimmed.substring(0, firstNewline).trim() else trimmed

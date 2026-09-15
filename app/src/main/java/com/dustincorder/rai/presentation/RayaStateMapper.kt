@@ -50,6 +50,7 @@ fun rayaUiStateFor(
     microphoneEnabled: Boolean = true,
     semanticEmotion: RayaEmotion = RayaEmotion.Calm,
     userTurnRevision: Long = 0L,
+    streamingText: String = "",
 ): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
         face = RayaFaceState(
@@ -61,6 +62,7 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     RayaState.Listening -> RayaUiState(
         face = RayaFaceState(
@@ -75,6 +77,7 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     RayaState.Thinking -> RayaUiState(
         face = RayaFaceState(
@@ -88,6 +91,7 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     is RayaState.Speaking -> RayaUiState(
         face = RayaFaceState(
@@ -103,6 +107,7 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
     is RayaState.Error -> RayaUiState(
         face = RayaFaceState(
@@ -116,5 +121,6 @@ fun rayaUiStateFor(
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
         userTurnRevision = userTurnRevision,
+        streamingText = streamingText,
     )
 }

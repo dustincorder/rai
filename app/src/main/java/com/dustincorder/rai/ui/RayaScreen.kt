@@ -374,6 +374,8 @@ private fun VoiceControls(
 
 private data class TransientSpeech(val text: String)
 
+private data class StreamingAssistant(val text: String)
+
 private object ThinkingIndicator
 
 @Composable
@@ -387,11 +389,13 @@ private fun ConversationArea(
     val showTransient = listening && state.userText.isNotBlank() &&
         messages.lastOrNull()?.text != state.userText
     val thinking = state.face.emotion == RayaFaceEmotion.Thinking
+    val showStreaming = thinking && state.streamingText.isNotBlank()
 
     val items: List<Any> = buildList {
         messages.forEach { add(it) }
         if (showTransient) add(TransientSpeech(state.userText))
-        if (thinking) add(ThinkingIndicator)
+        if (showStreaming) add(StreamingAssistant(state.streamingText))
+        if (thinking && !showStreaming) add(ThinkingIndicator)
     }
     var tailPolicy by remember { mutableStateOf(ConversationTailPolicyState()) }
     val currentItemCount = rememberUpdatedState(items.size)
@@ -472,12 +476,21 @@ private fun ConversationArea(
                         transient = true,
                     )
                 }
+                is StreamingAssistant -> StreamingBubble(item.text)
                 ThinkingIndicator -> AppearingBubble {
                     ThinkingBubble()
                 }
             }
         }
     }
+}
+
+@Composable
+private fun StreamingBubble(text: String) {
+    MessageBubble(
+        message = ConversationMessage(ConversationRole.Assistant, text),
+        transient = true,
+    )
 }
 
 @Composable

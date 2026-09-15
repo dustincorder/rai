@@ -2,6 +2,9 @@ package com.dustincorder.rai.data.llm
 
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -89,6 +92,42 @@ class GeminiReplyProvider(
             ?.joinToString("") { it.text }
             ?.takeIf { it.isNotBlank() }
         return text ?: error("Провайдер вернул пустой ответ.")
+    }
+
+    /** Streams raw SSE content chunks for [ReplyStreaming.toReplyEvents]. */
+    fun streamRaw(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        systemPrompt: String,
+        messages: List<ConversationMessage>,
+    ): Flow<String> {
+        val body = json.encodeToString(
+            GeminiGenerateRequest(
+                systemInstruction = GeminiSystemInstruction(listOf(GeminiPart(systemPrompt))),
+                contents = messages.map { message ->
+                    GeminiContent(
+                        role = if (message.role == ConversationRole.Assistant) "model" else "user",
+                        parts = listOf(GeminiPart(message.contextText)),
+                    )
+                },
+            ),
+        )
+        val url = "${baseUrl.trimEnd('/')}/models/$model:streamGenerateContent?alt=sse"
+        val request = Request.Builder()
+            .url(url)
+            .post(body.toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "text/event-stream")
+            .apply { if (!apiKey.isNullOrBlank()) header("x-goog-api-key", apiKey) }
+            .build()
+        return client.streamPostLines(request, json).mapNotNull { payload ->
+            runCatching {
+                json.decodeFromString<GeminiGenerateResponse>(payload)
+                    .candidates.firstOrNull()?.content?.parts
+                    ?.joinToString("") { it.text }
+                    ?.takeIf { it.isNotEmpty() }
+            }.getOrNull()
+        }.filter { it.isNotEmpty() }
     }
 
     suspend fun listModels(baseUrl: String, apiKey: String?): List<DiscoveredModel> {
