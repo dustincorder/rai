@@ -69,7 +69,11 @@ class RayaApplication : Application() {
         groq = WhisperSpeechRecognitionProvider(
             scope = runtimeScope,
             audioCapture = AndroidAudioCapture(),
-            transcription = GroqWhisperTranscriptionProvider(httpClient, json),
+            transcription = GroqWhisperTranscriptionProvider(
+                client = httpClient,
+                json = json,
+                apiKey = { apiKeyStore.read(com.dustincorder.rai.data.settings.LlmProviderPreset.Groq) },
+            ),
             model = { runBlocking { settingsRepository.settings.first().sttModelId } },
             languageHint = { null },
             diagnostics = { event -> debugVoice(event) },

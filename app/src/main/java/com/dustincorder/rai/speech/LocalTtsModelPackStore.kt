@@ -6,40 +6,37 @@ import com.dustincorder.rai.domain.TtsModelPackStore
 import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.zip.ZipInputStream
 
 /** App-private, explicit-install model store. No automatic multi-hundred-MB downloads. */
 class AndroidTtsModelPackStore(context: Context) : TtsModelPackStore {
     private val root = File(context.applicationContext.filesDir, "tts-model-packs")
 
     override suspend fun installed(languageTag: String): TtsModelPack? {
-        val metadata = File(root, "$languageTag/metadata.properties")
-        if (!metadata.exists()) return null
-        val values = metadata.readLines().mapNotNull { line ->
-            line.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
-        }.toMap()
-        return TtsModelPack(
-            id = values["id"] ?: return null,
-            version = values["version"] ?: return null,
-            languageTags = values["languages"].orEmpty().split(',').filter { it.isNotBlank() }.toSet(),
-            sha256 = values["sha256"] ?: return null,
-            byteSize = values["bytes"]?.toLongOrNull() ?: return null,
-            rootPath = File(root, values["id"] ?: return null).absolutePath,
-            modelPath = values["modelPath"],
-            tokensPath = values["tokensPath"],
-            dataDir = values["dataDir"],
-        )
+        val exact = findInstalled().firstOrNull { it.languageTags.any { tag -> tag.equals(languageTag, true) } }
+        return exact ?: findInstalled().firstOrNull { pack ->
+            pack.languageTags.any { tag -> tag.substringBefore('-').equals(languageTag.substringBefore('-'), true) }
+        }
     }
 
     override suspend fun install(pack: TtsModelPack, source: InputStream) {
         val target = File(root, pack.id)
-        val temp = File(root, ".${pack.id}.tmp")
+        val tempArchive = File(root, ".${pack.id}.zip.tmp")
+        val tempDir = File(root, ".${pack.id}.dir.tmp")
+        val backup = File(root, ".${pack.id}.backup")
         root.mkdirs()
-        temp.outputStream().use { output -> source.copyTo(output) }
-        require(temp.length() == pack.byteSize) { "TTS model size mismatch." }
-        require(sha256(temp) == pack.sha256.lowercase()) { "TTS model checksum mismatch." }
-        target.deleteRecursively()
-        require(temp.renameTo(target)) { "TTS model install failed." }
-        File(target, "metadata.properties").writeText(
+        tempArchive.deleteRecursively()
+        tempDir.deleteRecursively()
+        backup.deleteRecursively()
+        try {
+            tempArchive.outputStream().use { output -> source.copyTo(output) }
+            require(tempArchive.length() == pack.byteSize) { "TTS model archive size mismatch." }
+            require(sha256(tempArchive) == pack.sha256.lowercase()) { "TTS model archive checksum mismatch." }
+            extractSafely(tempArchive, tempDir)
+            require(pack.modelPath != null && File(tempDir, pack.modelPath).isFile) { "TTS model file is missing." }
+            require(pack.tokensPath != null && File(tempDir, pack.tokensPath).isFile) { "TTS tokens file is missing." }
+            if (!pack.dataDir.isNullOrBlank()) require(File(tempDir, pack.dataDir).isDirectory) { "TTS data directory is missing." }
+            File(tempDir, "metadata.properties").writeText(
             listOf(
                 "id=${pack.id}",
                 "version=${pack.version}",
@@ -50,7 +47,20 @@ class AndroidTtsModelPackStore(context: Context) : TtsModelPackStore {
                 "tokensPath=${pack.tokensPath.orEmpty()}",
                 "dataDir=${pack.dataDir.orEmpty()}",
             ).joinToString("\n"),
-        )
+            )
+            if (target.exists()) require(target.renameTo(backup)) { "TTS pack backup failed." }
+            require(tempDir.renameTo(target)) { "TTS pack install failed." }
+            backup.deleteRecursively()
+        } catch (failure: Throwable) {
+            tempArchive.deleteRecursively()
+            tempDir.deleteRecursively()
+            if (!target.exists() && backup.exists()) backup.renameTo(target)
+            throw failure
+        } finally {
+            tempArchive.deleteRecursively()
+            tempDir.deleteRecursively()
+            backup.deleteRecursively()
+        }
     }
 
     override suspend fun delete(packId: String) {
@@ -68,5 +78,43 @@ class AndroidTtsModelPackStore(context: Context) : TtsModelPackStore {
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun findInstalled(): List<TtsModelPack> = root.listFiles()
+        .orEmpty()
+        .filter { it.isDirectory && !it.name.startsWith('.') }
+        .mapNotNull { dir ->
+            val values = File(dir, "metadata.properties").takeIf { it.isFile }
+                ?.readLines()
+                ?.mapNotNull { line -> line.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }
+                ?.toMap() ?: return@mapNotNull null
+            TtsModelPack(
+                id = values["id"] ?: return@mapNotNull null,
+                version = values["version"] ?: return@mapNotNull null,
+                languageTags = values["languages"].orEmpty().split(',').filter { it.isNotBlank() }.toSet(),
+                sha256 = values["sha256"] ?: return@mapNotNull null,
+                byteSize = values["bytes"]?.toLongOrNull() ?: return@mapNotNull null,
+                rootPath = dir.absolutePath,
+                modelPath = values["modelPath"],
+                tokensPath = values["tokensPath"],
+                dataDir = values["dataDir"],
+            )
+        }
+
+    private fun extractSafely(archive: File, destination: File) {
+        destination.mkdirs()
+        val rootPath = destination.canonicalFile.toPath()
+        ZipInputStream(archive.inputStream().buffered()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val target = File(destination, entry.name).canonicalFile
+                require(target.toPath().startsWith(rootPath)) { "TTS archive contains unsafe path." }
+                if (entry.isDirectory) target.mkdirs() else {
+                    target.parentFile?.mkdirs()
+                    target.outputStream().use { output -> zip.copyTo(output) }
+                }
+                zip.closeEntry()
+            }
+        }
     }
 }

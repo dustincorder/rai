@@ -23,6 +23,7 @@ class GroqWhisperTranscriptionProviderTest {
             OkHttpClient(),
             Json { ignoreUnknownKeys = true },
             server.url("/audio/transcriptions").toString(),
+            apiKey = { "test-key" },
         )
     }
 
@@ -38,10 +39,11 @@ class GroqWhisperTranscriptionProviderTest {
         )
 
         assertEquals("Привет, Райя?", result.text)
-        assertEquals("ru-ru", result.languageTag)
+        assertEquals("ru", result.languageTag)
         val request = server.takeRequest()
         val body = request.body.readUtf8()
         assertTrue(body.contains("name=\"model\""))
+        assertTrue(request.getHeader("Authorization") == "Bearer test-key")
     }
 
     @Test
@@ -51,5 +53,18 @@ class GroqWhisperTranscriptionProviderTest {
             provider.transcribe(AudioUtterance(ByteArray(64), 16_000, 1), "whisper-large-v3", null)
         }.exceptionOrNull()
         assertTrue(failure != null)
+    }
+
+    @Test
+    fun `provider preserves whisper language codes without inventing regions`() = runTest {
+        listOf("ru", "uk", "en").forEach { language ->
+            server.enqueue(MockResponse().setBody("""{"text":"ok","language":"$language"}"""))
+            val result = provider.transcribe(
+                AudioUtterance(ByteArray(32), 16_000, 1),
+                "whisper-large-v3-turbo",
+                null,
+            )
+            assertEquals(language, result.languageTag)
+        }
     }
 }

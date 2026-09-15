@@ -30,6 +30,7 @@ class GroqWhisperTranscriptionProvider(
     private val client: OkHttpClient,
     private val json: Json,
     private val endpoint: String = "https://api.groq.com/openai/v1/audio/transcriptions",
+    private val apiKey: suspend () -> String? = { null },
 ) : SpeechTranscriptionProvider {
     override suspend fun transcribe(
         audio: AudioUtterance,
@@ -37,6 +38,8 @@ class GroqWhisperTranscriptionProvider(
         languageHint: String?,
     ): TranscriptionResult {
         require(model.isNotBlank()) { "STT model is required." }
+        val key = apiKey()?.takeIf { it.isNotBlank() }
+            ?: throw IOException("Groq STT API key is not configured.")
         val wav = pcm16ToWav(audio.pcm16, audio.sampleRateHz, audio.channels)
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -51,6 +54,7 @@ class GroqWhisperTranscriptionProvider(
         val request = Request.Builder()
             .url(endpoint)
             .post(body)
+            .header("Authorization", "Bearer $key")
             .build()
         val raw = client.await(request)
         val parsed = json.decodeFromString<WhisperResponse>(raw)
@@ -58,8 +62,7 @@ class GroqWhisperTranscriptionProvider(
     }
 
     private fun normalizeLanguage(value: String): String =
-        value.trim().lowercase().takeIf { it.isNotBlank() }?.let { if (it.length == 2) "$it-$it" else it }
-            ?: ""
+        value.trim().lowercase().takeIf { it.isNotBlank() }.orEmpty()
 
     private fun pcm16ToWav(pcm: ByteArray, sampleRate: Int, channels: Int): ByteArray {
         val byteRate = sampleRate * channels * 2
