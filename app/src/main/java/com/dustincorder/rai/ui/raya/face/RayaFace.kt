@@ -24,9 +24,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
@@ -37,6 +37,25 @@ import kotlin.math.min
 import kotlin.random.Random
 
 private val EyeCyan = Color(0xFF00A8B5)
+
+private enum class EyeShape {
+    Block,
+    Smile,
+    Open,
+    Wink,
+    Attention,
+    Thinking,
+    Flat,
+    ConfusedLeft,
+    ConfusedRight,
+    ConcernedLeft,
+    ConcernedRight,
+    SadLeft,
+    SadRight,
+    AngryLeft,
+    AngryRight,
+    Tired,
+}
 
 private val semanticFaceGallery = listOf(
     RayaFaceEmotion.Calm,
@@ -133,69 +152,65 @@ private fun DrawScope.drawFace(
     val shapeScale = listeningScale * speakingScale
     val eyeHeight = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.35f
-        RayaFaceEmotion.Happy -> eyeSize * 0.9f
-        RayaFaceEmotion.Excited -> eyeSize * 1.08f
-        RayaFaceEmotion.Playful -> eyeSize * 0.92f
-        RayaFaceEmotion.Curious -> eyeSize * 1.18f
+        RayaFaceEmotion.Happy -> eyeSize * 1.05f
+        RayaFaceEmotion.Excited -> eyeSize * 1.25f
+        RayaFaceEmotion.Playful -> eyeSize * 1.0f
+        RayaFaceEmotion.Curious -> eyeSize * 1.2f
         RayaFaceEmotion.SemanticThinking -> eyeSize * 0.78f
         RayaFaceEmotion.Skeptical -> eyeSize * 0.9f
         RayaFaceEmotion.Confused -> eyeSize * 1.0f
-        RayaFaceEmotion.Concerned -> eyeSize * 0.92f
-        RayaFaceEmotion.Sad -> eyeSize * 0.78f
-        RayaFaceEmotion.Embarrassed -> eyeSize * 0.86f
-        RayaFaceEmotion.Annoyed -> eyeSize * 0.56f
+        RayaFaceEmotion.Concerned -> eyeSize * 1.0f
+        RayaFaceEmotion.Sad -> eyeSize * 0.92f
+        RayaFaceEmotion.Embarrassed -> eyeSize * 0.72f
+        RayaFaceEmotion.Annoyed -> eyeSize * 0.62f
         RayaFaceEmotion.Tired -> eyeSize * 0.46f
-        RayaFaceEmotion.Angry -> eyeSize * 0.95f
+        RayaFaceEmotion.Angry -> eyeSize * 1.0f
         RayaFaceEmotion.Error -> eyeSize * (0.72f + errorPulse * 0.18f)
         else -> eyeSize
     } * shapeScale
     val eyeWidth = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.25f
-        RayaFaceEmotion.Happy -> eyeSize * 1.28f
-        RayaFaceEmotion.Excited -> eyeSize * 1.34f
-        RayaFaceEmotion.Playful -> eyeSize * 1.18f
+        RayaFaceEmotion.Happy -> eyeSize * 1.18f
+        RayaFaceEmotion.Excited -> eyeSize * 1.35f
+        RayaFaceEmotion.Playful -> eyeSize * 1.12f
         RayaFaceEmotion.Curious -> eyeSize * 1.12f
-        RayaFaceEmotion.Skeptical -> eyeSize * 1.16f
+        RayaFaceEmotion.SemanticThinking -> eyeSize * 1.08f
+        RayaFaceEmotion.Skeptical -> eyeSize * 1.18f
         RayaFaceEmotion.Confused -> eyeSize * 1.08f
         RayaFaceEmotion.Concerned -> eyeSize * 1.04f
-        RayaFaceEmotion.Sad -> eyeSize * 1.02f
-        RayaFaceEmotion.Embarrassed -> eyeSize * 1.02f
+        RayaFaceEmotion.Sad -> eyeSize * 1.08f
+        RayaFaceEmotion.Embarrassed -> eyeSize * 0.92f
         RayaFaceEmotion.Annoyed -> eyeSize * 1.22f
         RayaFaceEmotion.Tired -> eyeSize * 1.12f
         RayaFaceEmotion.Error -> eyeSize * (0.9f + errorPulse * 0.1f)
         else -> eyeSize
     }
-    val eyeAngle = when (state.emotion) {
-        RayaFaceEmotion.Happy -> -8f
-        RayaFaceEmotion.Excited -> -4f
-        RayaFaceEmotion.Playful -> -5f
-        RayaFaceEmotion.Curious -> -3f
-        RayaFaceEmotion.SemanticThinking -> -12f
-        RayaFaceEmotion.Skeptical -> 7f
-        RayaFaceEmotion.Confused -> 2f
-        RayaFaceEmotion.Concerned -> -4f
-        RayaFaceEmotion.Angry -> -18f
+    val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
+    val eyeY = centerY + when (state.emotion) {
+        RayaFaceEmotion.SemanticThinking -> height * 0.018f
+        RayaFaceEmotion.Embarrassed -> height * 0.022f
         else -> 0f
     }
-    val errorOffset = if (state.emotion == RayaFaceEmotion.Error) (errorPulse - 0.5f) * eyeSize * 0.18f else 0f
-
-    val leftHeight = when (state.emotion) {
-        RayaFaceEmotion.Playful -> eyeHeight * 1.04f
-        RayaFaceEmotion.Skeptical -> eyeHeight * 0.68f
-        RayaFaceEmotion.Confused -> eyeHeight * 1.14f
-        RayaFaceEmotion.Embarrassed -> eyeHeight * 0.94f
-        else -> eyeHeight
+    val (leftShape, rightShape) = when (state.emotion) {
+        RayaFaceEmotion.Happy -> EyeShape.Smile to EyeShape.Smile
+        RayaFaceEmotion.Excited -> EyeShape.Open to EyeShape.Open
+        RayaFaceEmotion.Playful -> EyeShape.Smile to EyeShape.Wink
+        RayaFaceEmotion.Curious -> EyeShape.Attention to EyeShape.Attention
+        RayaFaceEmotion.SemanticThinking -> EyeShape.Thinking to EyeShape.Thinking
+        RayaFaceEmotion.Skeptical -> EyeShape.Flat to EyeShape.Block
+        RayaFaceEmotion.Confused -> EyeShape.ConfusedLeft to EyeShape.ConfusedRight
+        RayaFaceEmotion.Concerned -> EyeShape.ConcernedLeft to EyeShape.ConcernedRight
+        RayaFaceEmotion.Sad -> EyeShape.SadLeft to EyeShape.SadRight
+        RayaFaceEmotion.Embarrassed -> EyeShape.Wink to EyeShape.Wink
+        RayaFaceEmotion.Angry -> EyeShape.AngryLeft to EyeShape.AngryRight
+        RayaFaceEmotion.Annoyed -> EyeShape.Flat to EyeShape.Wink
+        RayaFaceEmotion.Tired -> EyeShape.Tired to EyeShape.Tired
+        RayaFaceEmotion.Surprised -> EyeShape.Open to EyeShape.Open
+        else -> EyeShape.Block to EyeShape.Block
     }
-    val rightHeight = when (state.emotion) {
-        RayaFaceEmotion.Playful -> eyeHeight * 0.78f
-        RayaFaceEmotion.Skeptical -> eyeHeight * 1.18f
-        RayaFaceEmotion.Confused -> eyeHeight * 0.78f
-        RayaFaceEmotion.Embarrassed -> eyeHeight * 0.82f
-        else -> eyeHeight
-    }
 
-    drawEye(width * (0.36f + gazeX) - errorOffset, centerY, eyeWidth, leftHeight, color, eyeAngle, blinking)
-    drawEye(width * (0.64f + gazeX) + errorOffset, centerY, eyeWidth, rightHeight, color, -eyeAngle, blinking)
+    drawEye(width * (0.36f + gazeX) - errorOffset, eyeY, eyeWidth, eyeHeight, color, leftShape, blinking)
+    drawEye(width * (0.64f + gazeX) + errorOffset, eyeY, eyeWidth, eyeHeight, color, rightShape, blinking)
 
     when (state.emotion) {
         RayaFaceEmotion.Thinking -> drawThinkingDots(width, height, color, thinkingSweep)
@@ -212,15 +227,82 @@ private fun DrawScope.drawEye(
     width: Float,
     height: Float,
     color: Color,
-    angle: Float,
+    shape: EyeShape,
     blinking: Boolean,
 ) {
     val closedHeight = size.height * 0.012f
-    withTransform({ rotate(angle, pivot = point(x, y)) }) {
-        drawRect(
-            color = color,
-            topLeft = point(x - width / 2f, y - if (blinking) closedHeight / 2f else height / 2f),
-            size = dimensions(width, if (blinking) closedHeight else height),
+    if (blinking) {
+        drawRect(color, point(x - width / 2f, y - closedHeight / 2f), dimensions(width, closedHeight))
+        return
+    }
+    val left = x - width / 2f
+    val right = x + width / 2f
+    val top = y - height / 2f
+    val bottom = y + height / 2f
+    val thick = height * 0.28f
+    fun path(points: List<Pair<Float, Float>>) = Path().apply {
+        moveTo(points.first().first, points.first().second)
+        points.drop(1).forEach { lineTo(it.first, it.second) }
+        close()
+    }
+    when (shape) {
+        EyeShape.Block,
+        EyeShape.Open,
+        -> drawRect(color, point(left, top), dimensions(width, height))
+        EyeShape.Flat,
+        EyeShape.Wink,
+        EyeShape.Tired,
+        -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
+        EyeShape.Smile -> drawPath(
+            path(listOf(
+                left to bottom,
+                x to top,
+                right to bottom,
+                right to (bottom - thick),
+                x to (top + thick),
+                left to (bottom - thick),
+            )),
+            color,
+        )
+        EyeShape.Attention -> drawPath(
+            path(listOf(left to (top + thick), (left + width * 0.2f) to top, right to top, right to bottom, left to bottom)),
+            color,
+        )
+        EyeShape.Thinking -> drawPath(
+            path(listOf(left to (top + thick), right to top, right to bottom, left to (bottom - thick))),
+            color,
+        )
+        EyeShape.ConfusedLeft -> drawPath(
+            path(listOf(left to top, right to (top + thick), right to bottom, left to (bottom - thick))),
+            color,
+        )
+        EyeShape.ConfusedRight -> drawPath(
+            path(listOf(left to (top + thick), right to top, right to (bottom - thick), left to bottom)),
+            color,
+        )
+        EyeShape.ConcernedLeft -> drawPath(
+            path(listOf(left to top, right to (top + height * 0.2f), right to bottom, left to bottom)),
+            color,
+        )
+        EyeShape.ConcernedRight -> drawPath(
+            path(listOf(left to (top + height * 0.2f), right to top, right to bottom, left to bottom)),
+            color,
+        )
+        EyeShape.SadLeft -> drawPath(
+            path(listOf(left to (top + height * 0.2f), right to top, right to bottom, left to (bottom - thick))),
+            color,
+        )
+        EyeShape.SadRight -> drawPath(
+            path(listOf(left to top, right to (top + height * 0.2f), right to (bottom - thick), left to bottom)),
+            color,
+        )
+        EyeShape.AngryLeft -> drawPath(
+            path(listOf(left to top, right to (top + height * 0.3f), right to bottom, left to (bottom - thick))),
+            color,
+        )
+        EyeShape.AngryRight -> drawPath(
+            path(listOf(left to (top + height * 0.3f), right to top, right to (bottom - thick), left to bottom)),
+            color,
         )
     }
 }
