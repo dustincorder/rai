@@ -44,8 +44,9 @@ class RayaViewModel(
             orchestrator.userText,
             orchestrator.conversation,
             orchestrator.semanticEmotion,
-        ) { state, userText, conversation, semanticEmotion ->
-            RayaUiFlux(state, userText, conversation, semanticEmotion)
+            orchestrator.userTurnRevision,
+        ) { state, userText, conversation, semanticEmotion, userTurnRevision ->
+            RayaUiFlux(state, userText, conversation, semanticEmotion, userTurnRevision)
         },
         combine(
             orchestrator.interactionMode,
@@ -63,6 +64,7 @@ class RayaViewModel(
             voiceSessionActive = session.second,
             microphoneEnabled = session.third,
             semanticEmotion = chat.semanticEmotion,
+            userTurnRevision = chat.userTurnRevision,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RayaUiState())
 
@@ -71,6 +73,7 @@ class RayaViewModel(
         val userText: String,
         val conversation: List<ConversationMessage>,
         val semanticEmotion: RayaEmotion,
+        val userTurnRevision: Long,
     )
 
     fun submitText(text: String) = orchestrator.submitText(text)

@@ -12,6 +12,7 @@ data class RayaUiState(
     val errorMessage: String? = null,
     val isBusy: Boolean = false,
     val isSpeaking: Boolean = false,
+    val userTurnRevision: Long = 0L,
     val interactionMode: InteractionMode = InteractionMode.Text,
     val voiceSessionActive: Boolean = false,
     val microphoneEnabled: Boolean = true,

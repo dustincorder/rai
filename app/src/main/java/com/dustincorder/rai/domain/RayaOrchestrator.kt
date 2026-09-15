@@ -69,6 +69,9 @@ class RayaOrchestrator(
     private val _lastResponseLanguageTag = MutableStateFlow<String?>(null)
     val lastResponseLanguageTag: StateFlow<String?> = _lastResponseLanguageTag.asStateFlow()
 
+    private val _userTurnRevision = MutableStateFlow(0L)
+    val userTurnRevision: StateFlow<Long> = _userTurnRevision.asStateFlow()
+
     private var sessionJob: Job? = null
     private var activeTurnJob: Job? = null
     private var turnEpoch = 0
@@ -93,6 +96,7 @@ class RayaOrchestrator(
         if (_voiceSessionActive.value) return
         if (textTurnInFlight) return
         val languageTag: String? = null
+        markUserTurnIntent()
         textTurnInFlight = true
         scope.launch {
             try {
@@ -138,7 +142,7 @@ class RayaOrchestrator(
                 "microphoneEnabled=${_microphoneEnabled.value} state=${stateName()}",
         )
         launchInactivityMonitor()
-        beginVoiceTurn(resetActivity = true)
+        beginVoiceTurn(resetActivity = true, explicitIntent = true)
     }
 
     fun endVoiceSession() = endVoiceSessionInternal(notice = false, reason = "user")
@@ -158,7 +162,7 @@ class RayaOrchestrator(
             when {
                 _state.value == RayaState.Listening ||
                     _state.value is RayaState.Speaking ||
-                    _state.value == RayaState.Idle -> beginVoiceTurn(resetActivity = true)
+                    _state.value == RayaState.Idle -> beginVoiceTurn(resetActivity = true, explicitIntent = true)
             }
         } else {
             if (_state.value == RayaState.Listening) {
@@ -220,9 +224,10 @@ class RayaOrchestrator(
         speechSynthesis.shutdown()
     }
 
-    private fun beginVoiceTurn(resetActivity: Boolean) {
+    private fun beginVoiceTurn(resetActivity: Boolean, explicitIntent: Boolean = false) {
         if (sessionJob?.isActive != true) return
         val parent = sessionJob ?: return
+        if (explicitIntent) markUserTurnIntent()
         val epoch = ++turnEpoch
         if (resetActivity) {
             lastUserActivityAt = now()
@@ -332,6 +337,7 @@ class RayaOrchestrator(
         val queryBlank = addressing.query.isBlank()
         val localResponse = addressing.addressed && queryBlank
         routingDiagnostics.record(addressing.addressed, queryBlank, localResponse)
+        markUserTurnIntent()
 
         _state.value = RayaState.Thinking
         _conversation.value = appendMessage(
@@ -389,6 +395,10 @@ class RayaOrchestrator(
             return
         }
         beginVoiceTurn(resetActivity = true)
+    }
+
+    private fun markUserTurnIntent() {
+        _userTurnRevision.value += 1
     }
 
     private fun launchInactivityMonitor() {

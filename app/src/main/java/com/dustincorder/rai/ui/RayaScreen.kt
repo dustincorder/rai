@@ -392,7 +392,7 @@ private fun ConversationArea(
         if (showTransient) add(TransientSpeech(state.userText))
         if (thinking) add(ThinkingIndicator)
     }
-    var followTail by remember { mutableStateOf(true) }
+    var tailPolicy by remember { mutableStateOf(ConversationTailPolicyState()) }
     val currentItemCount = rememberUpdatedState(items.size)
 
     LaunchedEffect(listState) {
@@ -402,13 +402,22 @@ private fun ConversationArea(
             val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
             total to (total == 0 || lastVisible >= total - 2)
         }.collect { (total, atBottom) ->
-            // Ignore transitional samples from the old layout after items change.
-            if (total == currentItemCount.value) followTail = atBottom
+            tailPolicy = tailPolicy.onViewportSample(total, currentItemCount.value, atBottom)
+        }
+    }
+
+    LaunchedEffect(state.userTurnRevision) {
+        val nextPolicy = tailPolicy.onUserTurnRevision(state.userTurnRevision)
+        val newIntent = nextPolicy.handledUserTurnRevision != tailPolicy.handledUserTurnRevision
+        tailPolicy = nextPolicy
+        if (newIntent && items.isNotEmpty()) {
+            androidx.compose.runtime.withFrameNanos { }
+            listState.animateScrollToItem(items.lastIndex)
         }
     }
 
     LaunchedEffect(items) {
-        if (items.isNotEmpty() && followTail) {
+        if (items.isNotEmpty() && tailPolicy.followTail) {
             androidx.compose.runtime.withFrameNanos { }
             listState.animateScrollToItem(items.lastIndex)
         }

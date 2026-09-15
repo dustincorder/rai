@@ -48,6 +48,7 @@ fun rayaUiStateFor(
     voiceSessionActive: Boolean = false,
     microphoneEnabled: Boolean = true,
     semanticEmotion: RayaEmotion = RayaEmotion.Calm,
+    userTurnRevision: Long = 0L,
 ): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
         face = RayaFaceState(
@@ -58,6 +59,7 @@ fun rayaUiStateFor(
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
+        userTurnRevision = userTurnRevision,
     )
     RayaState.Listening -> RayaUiState(
         face = RayaFaceState(
@@ -71,6 +73,7 @@ fun rayaUiStateFor(
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
+        userTurnRevision = userTurnRevision,
     )
     RayaState.Thinking -> RayaUiState(
         face = RayaFaceState(
@@ -83,6 +86,7 @@ fun rayaUiStateFor(
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
+        userTurnRevision = userTurnRevision,
     )
     is RayaState.Speaking -> RayaUiState(
         face = RayaFaceState(
@@ -97,6 +101,7 @@ fun rayaUiStateFor(
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
+        userTurnRevision = userTurnRevision,
     )
     is RayaState.Error -> RayaUiState(
         face = RayaFaceState(
@@ -109,5 +114,6 @@ fun rayaUiStateFor(
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,
+        userTurnRevision = userTurnRevision,
     )
 }
