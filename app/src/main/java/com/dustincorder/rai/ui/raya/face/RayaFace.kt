@@ -37,10 +37,11 @@ import kotlin.math.min
 import kotlin.random.Random
 
 private val EyeCyan = Color(0xFF00A8B5)
+private val BlushPink = Color(0xFFE66F88)
 
 private enum class EyeShape {
     Block,
-    Smile,
+    Chevron,
     Open,
     Wink,
     Attention,
@@ -155,7 +156,7 @@ private fun DrawScope.drawFace(
         RayaFaceEmotion.Happy -> eyeSize * 1.05f
         RayaFaceEmotion.Excited -> eyeSize * 1.25f
         RayaFaceEmotion.Playful -> eyeSize * 1.0f
-        RayaFaceEmotion.Curious -> eyeSize * 1.2f
+        RayaFaceEmotion.Curious -> eyeSize * 1.02f
         RayaFaceEmotion.SemanticThinking -> eyeSize * 0.78f
         RayaFaceEmotion.Skeptical -> eyeSize * 0.9f
         RayaFaceEmotion.Confused -> eyeSize * 1.0f
@@ -192,9 +193,9 @@ private fun DrawScope.drawFace(
         else -> 0f
     }
     val (leftShape, rightShape) = when (state.emotion) {
-        RayaFaceEmotion.Happy -> EyeShape.Smile to EyeShape.Smile
+        RayaFaceEmotion.Happy -> EyeShape.Chevron to EyeShape.Chevron
         RayaFaceEmotion.Excited -> EyeShape.Open to EyeShape.Open
-        RayaFaceEmotion.Playful -> EyeShape.Smile to EyeShape.Wink
+        RayaFaceEmotion.Playful -> EyeShape.Chevron to EyeShape.Wink
         RayaFaceEmotion.Curious -> EyeShape.Attention to EyeShape.Attention
         RayaFaceEmotion.SemanticThinking -> EyeShape.Thinking to EyeShape.Thinking
         RayaFaceEmotion.Skeptical -> EyeShape.Flat to EyeShape.Block
@@ -209,11 +210,14 @@ private fun DrawScope.drawFace(
         else -> EyeShape.Block to EyeShape.Block
     }
 
-    drawEye(width * (0.36f + gazeX) - errorOffset, eyeY, eyeWidth, eyeHeight, color, leftShape, blinking)
-    drawEye(width * (0.64f + gazeX) + errorOffset, eyeY, eyeWidth, eyeHeight, color, rightShape, blinking)
+    val shyOffset = if (state.emotion == RayaFaceEmotion.Embarrassed) -width * 0.025f else 0f
+    val annoyedDrop = if (state.emotion == RayaFaceEmotion.Annoyed) height * 0.012f else 0f
+    drawEye(width * (0.36f + gazeX) + shyOffset - errorOffset, eyeY, eyeWidth, eyeHeight, color, leftShape, blinking)
+    drawEye(width * (0.64f + gazeX) + shyOffset + errorOffset, eyeY + annoyedDrop, eyeWidth, eyeHeight, color, rightShape, blinking)
 
     when (state.emotion) {
         RayaFaceEmotion.Thinking -> drawThinkingDots(width, height, color, thinkingSweep)
+        RayaFaceEmotion.Embarrassed -> drawEmbarrassmentMarks(width, height)
         RayaFaceEmotion.Surprised -> drawSurprisedMouth(width, height, color)
         RayaFaceEmotion.Angry -> drawAngryMouth(width, height, color)
         else -> Unit
@@ -249,36 +253,36 @@ private fun DrawScope.drawEye(
         EyeShape.Block,
         EyeShape.Open,
         -> drawRect(color, point(left, top), dimensions(width, height))
-        EyeShape.Flat,
-        EyeShape.Wink,
-        EyeShape.Tired,
-        -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
-        EyeShape.Smile -> drawPath(
-            path(listOf(
-                left to bottom,
-                x to top,
-                right to bottom,
-                right to (bottom - thick),
-                x to (top + thick),
-                left to (bottom - thick),
-            )),
+        EyeShape.Flat -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
+        EyeShape.Wink -> drawRect(
             color,
+            point(x - width * 0.36f, y - thick / 2f),
+            dimensions(width * 0.72f, thick),
         )
+        EyeShape.Tired -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
+        EyeShape.Chevron -> {
+            val stroke = height * 0.28f
+            drawLine(color, point(left, bottom), point(x, top), stroke, StrokeCap.Square)
+            drawLine(color, point(x, top), point(right, bottom), stroke, StrokeCap.Square)
+        }
         EyeShape.Attention -> drawPath(
             path(listOf(left to (top + thick), (left + width * 0.2f) to top, right to top, right to bottom, left to bottom)),
             color,
         )
-        EyeShape.Thinking -> drawPath(
-            path(listOf(left to (top + thick), right to top, right to bottom, left to (bottom - thick))),
+        EyeShape.Thinking -> drawRect(
             color,
+            point(left + width * 0.18f, y - height * 0.2f),
+            dimensions(width * 0.82f, height * 0.4f),
         )
-        EyeShape.ConfusedLeft -> drawPath(
-            path(listOf(left to top, right to (top + thick), right to bottom, left to (bottom - thick))),
+        EyeShape.ConfusedLeft -> drawRect(
             color,
+            point(left + width * 0.08f, y - height * 0.34f),
+            dimensions(width * 0.84f, height * 0.42f),
         )
-        EyeShape.ConfusedRight -> drawPath(
-            path(listOf(left to (top + thick), right to top, right to (bottom - thick), left to bottom)),
+        EyeShape.ConfusedRight -> drawRect(
             color,
+            point(left + width * 0.08f, y - height * 0.08f),
+            dimensions(width * 0.84f, height * 0.42f),
         )
         EyeShape.ConcernedLeft -> drawPath(
             path(listOf(left to top, right to (top + height * 0.2f), right to bottom, left to bottom)),
@@ -315,12 +319,33 @@ private fun DrawScope.drawThinkingDots(width: Float, height: Float, color: Color
 }
 
 private fun DrawScope.drawSurprisedMouth(width: Float, height: Float, color: Color) {
-    drawRect(color, point(width * 0.47f, height * 0.63f), dimensions(width * 0.06f, height * 0.1f))
+    drawRect(color, point(width * 0.47f, height * 0.63f), dimensions(width * 0.06f, height * 0.11f))
 }
 
 private fun DrawScope.drawAngryMouth(width: Float, height: Float, color: Color) {
-    drawLine(color, point(width * 0.44f, height * 0.66f), point(width * 0.5f, height * 0.71f), width * 0.018f, StrokeCap.Square)
-    drawLine(color, point(width * 0.5f, height * 0.71f), point(width * 0.56f, height * 0.66f), width * 0.018f, StrokeCap.Square)
+    // Canvas Y grows downward: center above endpoints makes an unmistakable frown, not a smile.
+    drawLine(color, point(width * 0.45f, height * 0.7f), point(width * 0.5f, height * 0.65f), width * 0.016f, StrokeCap.Square)
+    drawLine(color, point(width * 0.5f, height * 0.65f), point(width * 0.55f, height * 0.7f), width * 0.016f, StrokeCap.Square)
+}
+
+private fun DrawScope.drawEmbarrassmentMarks(width: Float, height: Float) {
+    repeat(3) { index ->
+        val shift = index * width * 0.018f
+        drawLine(
+            BlushPink,
+            point(width * 0.22f + shift, height * 0.61f),
+            point(width * 0.235f + shift, height * 0.65f),
+            width * 0.007f,
+            StrokeCap.Square,
+        )
+        drawLine(
+            BlushPink,
+            point(width * 0.78f - shift, height * 0.61f),
+            point(width * 0.765f - shift, height * 0.65f),
+            width * 0.007f,
+            StrokeCap.Square,
+        )
+    }
 }
 
 private fun point(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(x, y)
