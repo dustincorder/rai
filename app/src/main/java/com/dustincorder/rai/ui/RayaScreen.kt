@@ -481,7 +481,7 @@ private fun ConversationArea(
                         transient = true,
                     )
                 }
-                is StreamingAssistant -> StreamingBubble(item.text)
+                is StreamingAssistant -> AppearingBubble { StreamingBubble(item.text) }
                 ThinkingIndicator -> AppearingBubble {
                     ThinkingBubble()
                 }

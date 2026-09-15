@@ -84,7 +84,7 @@ fun rayaUiStateFor(
             emotion = RayaFaceEmotion.Thinking,
             gaze = RayaGaze.Up,
         ),
-        status = "Размышляю",
+        status = if (streamingText.isBlank()) "Размышляю" else "Отвечаю",
         conversation = conversation,
         isBusy = true,
         interactionMode = interactionMode,
