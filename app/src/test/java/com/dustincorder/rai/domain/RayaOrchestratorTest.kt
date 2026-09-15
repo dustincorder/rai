@@ -382,6 +382,56 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `N quick mic off toggled on before delayed cancel error keeps turn B alive`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("Привет, Райя!"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        assertFalse(orchestrator.microphoneEnabled.value)
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+
+        recognition.staleCancellationErrorOnNextStart = SpeechRecognitionEvent.Error(
+            SpeechRecognitionErrorReason.Other,
+            "Ошибка распознавания речи (5).",
+        )
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+
+        assertEquals("stale old-generation error must be dropped at the adapter boundary", 1, recognition.suppressedCancellationEvents)
+        assertTrue(orchestrator.voiceSessionActive.value)
+        assertTrue(orchestrator.microphoneEnabled.value)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertFalse("no fatal error from a stale cancellation", orchestrator.state.value is RayaState.Error)
+
+        val startsBeforeFinal = recognition.startCount
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, расскажи про марс", "ru-RU"))
+        runCurrent()
+
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+        assertEquals(1, reply.callCount)
+        assertEquals(
+            listOf(
+                ConversationMessage(ConversationRole.User, "Рая, расскажи про марс", "расскажи про марс"),
+            ),
+            reply.lastMessages,
+        )
+        assertEquals("no unexpected additional recognition turn", startsBeforeFinal, recognition.startCount)
+
+        reply.complete()
+        runCurrent()
+        assertEquals(RayaState.Speaking("Привет, Райя!"), orchestrator.state.value)
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
     fun `G mic on resumes listening`() = runTest {
         val recognition = FakeRecognitionProvider()
         val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), FakeReplyProvider())
@@ -1114,25 +1164,42 @@ private class FakeRecognitionProvider : SpeechRecognitionProvider {
     var lastRequest: RecognitionRequest? = null
     var emitImmediateOnStart: SpeechRecognitionEvent? = null
     var throwOnStart = false
+    var staleCancellationErrorOnNextStart: SpeechRecognitionEvent? = null
+    var suppressedCancellationEvents = 0
+    private val cancellationGate = RecognitionCancellationGate()
 
     override suspend fun startListening(request: RecognitionRequest) {
         lastRequest = request
         startCount++
+        cancellationGate.markStarted()
+        staleCancellationErrorOnNextStart?.let { stale ->
+            staleCancellationErrorOnNextStart = null
+            deliver(stale)
+        }
         emitImmediateOnStart?.let { event ->
             emitImmediateOnStart = null
-            _events.emit(event)
+            deliver(event)
         }
         if (throwOnStart) throw RuntimeException("startListening failure")
     }
 
     override fun cancel() {
         cancelCount++
+        cancellationGate.onCancel()
     }
 
     override fun release() = Unit
 
     suspend fun emit(event: SpeechRecognitionEvent) {
         _events.emit(event)
+    }
+
+    private suspend fun deliver(event: SpeechRecognitionEvent) {
+        if (cancellationGate.shouldForward(event)) {
+            _events.emit(event)
+        } else {
+            suppressedCancellationEvents++
+        }
     }
 }
 

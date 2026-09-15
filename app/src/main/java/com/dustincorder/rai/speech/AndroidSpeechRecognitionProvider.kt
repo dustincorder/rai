@@ -11,6 +11,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import com.dustincorder.rai.BuildConfig
+import com.dustincorder.rai.domain.RecognitionCancellationGate
 import com.dustincorder.rai.domain.RecognitionRequest
 import com.dustincorder.rai.domain.SpeechRecognitionErrorReason
 import com.dustincorder.rai.domain.SpeechRecognitionEvent
@@ -28,6 +29,7 @@ import kotlin.coroutines.resume
 class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProvider {
     private val _events = MutableSharedFlow<SpeechRecognitionEvent>(extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
+    private val cancellationGate = RecognitionCancellationGate()
     private var detectedLanguageTag: String? = null
     private var detectionSupported: Boolean? = null
 
@@ -58,14 +60,20 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
             }
 
             override fun onResults(results: Bundle?) {
-                if (results?.firstText() != null) {
+                val event = if (results?.firstText() != null) {
                     debug("stt.onResults detectedLanguageTag=${detectedLanguageTag ?: "null"}")
-                    _events.tryEmit(SpeechRecognitionEvent.Final(results.firstText()!!, detectedLanguageTag))
+                    SpeechRecognitionEvent.Final(results.firstText()!!, detectedLanguageTag)
                 } else {
                     debug("stt.onResults EMPTY -> NoMatch")
-                    _events.tryEmit(
-                        SpeechRecognitionEvent.Error(SpeechRecognitionErrorReason.NoMatch, "Речь не распознана."),
+                    SpeechRecognitionEvent.Error(
+                        SpeechRecognitionErrorReason.NoMatch,
+                        "Речь не распознана.",
                     )
+                }
+                if (cancellationGate.shouldForward(event)) {
+                    _events.tryEmit(event)
+                } else {
+                    debug("stt.onResults STALE_CANCELLATION -> dropped")
                 }
             }
 
@@ -81,7 +89,11 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
                 debug(
                     "stt.onError code=$error reason=${event.reason} message=${event.message}",
                 )
-                _events.tryEmit(event)
+                if (cancellationGate.shouldForward(event)) {
+                    _events.tryEmit(event)
+                } else {
+                    debug("stt.onError STALE_CANCELLATION -> dropped")
+                }
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -89,6 +101,7 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
     }
 
     override suspend fun startListening(request: RecognitionRequest) {
+        cancellationGate.markStarted()
         detectedLanguageTag = null
         val supportsDetection = detectionSupport()
         val languagePlan = request.toLanguagePlan(supportsDetection)
@@ -108,6 +121,7 @@ class AndroidSpeechRecognitionProvider(context: Context) : SpeechRecognitionProv
     }
 
     override fun cancel() {
+        cancellationGate.onCancel()
         recognizer.cancel()
     }
 

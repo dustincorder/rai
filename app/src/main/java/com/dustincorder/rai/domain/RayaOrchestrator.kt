@@ -64,6 +64,7 @@ class RayaOrchestrator(
     val microphoneEnabled: StateFlow<Boolean> = _microphoneEnabled.asStateFlow()
 
     private var sessionJob: Job? = null
+    private var activeTurnJob: Job? = null
     private var turnEpoch = 0
     private var lastUserActivityAt = Long.MAX_VALUE
     private var textTurnInFlight = false
@@ -153,6 +154,7 @@ class RayaOrchestrator(
             if (_state.value == RayaState.Listening) {
                 _state.value = RayaState.Idle
                 turnEpoch++
+                activeTurnJob?.cancel()
                 record(
                     "voice.micOffTurnInvalidated turnEpoch=$turnEpoch " +
                         "voiceSessionActive=${_voiceSessionActive.value}",
@@ -217,7 +219,7 @@ class RayaOrchestrator(
             "voice.beginTurn epoch=$epoch resetActivity=$resetActivity " +
                 "voiceSessionActive=${_voiceSessionActive.value} microphoneEnabled=${_microphoneEnabled.value}",
         )
-        scope.launch(parent) {
+        activeTurnJob = scope.launch(parent) {
             runVoiceTurn(epoch)
         }
     }
