@@ -41,8 +41,9 @@ class RuntimeVoiceWiringTest {
     fun `groq adapter captures endpoint transcribes and emits final`() = runTest {
         val capture = FakeAudioCapture()
         val transcription = FakeTranscriptionProvider()
+        val providerScope = CoroutineScope(Dispatchers.Unconfined)
         val provider = WhisperSpeechRecognitionProvider(
-            scope = this,
+            scope = providerScope,
             audioCapture = capture,
             transcription = transcription,
             model = { "whisper-large-v3-turbo" },
@@ -50,6 +51,7 @@ class RuntimeVoiceWiringTest {
         )
 
         val event = async { provider.events.first() }
+        runCurrent()
         provider.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "ru-RU",
@@ -62,6 +64,7 @@ class RuntimeVoiceWiringTest {
         assertEquals("whisper-large-v3-turbo", transcription.lastModel)
         assertTrue(capture.called)
         provider.release()
+        providerScope.cancel()
     }
 
     @Test
@@ -69,14 +72,16 @@ class RuntimeVoiceWiringTest {
         val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.System))
         val system = FakeRecognitionProvider(SpeechRecognitionEvent.Final("system", "en-US"))
         val groq = FakeRecognitionProvider(SpeechRecognitionEvent.Final("groq", "en-US"))
+        val providerScope = CoroutineScope(Dispatchers.Unconfined)
         val runtime = RuntimeSpeechRecognitionProvider(
-            scope = this,
+            scope = providerScope,
             settings = settings,
             keys = FakeApiKeyStore("key"),
             groq = groq,
             system = system,
         )
         val event = async { runtime.events.first() }
+        runCurrent()
 
         runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
@@ -87,6 +92,7 @@ class RuntimeVoiceWiringTest {
         assertEquals(1, system.startCount)
         assertEquals(0, groq.startCount)
         runtime.release()
+        providerScope.cancel()
     }
 
     @Test
@@ -94,14 +100,16 @@ class RuntimeVoiceWiringTest {
         val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.GroqWhisper))
         val groq = FakeRecognitionProvider(SpeechRecognitionEvent.Final("groq", "ru-RU"))
         val system = FakeRecognitionProvider(SpeechRecognitionEvent.Final("system", "ru-RU"))
+        val providerScope = CoroutineScope(Dispatchers.Unconfined)
         val runtime = RuntimeSpeechRecognitionProvider(
-            scope = this,
+            scope = providerScope,
             settings = settings,
             keys = FakeApiKeyStore("key"),
             groq = groq,
             system = system,
         )
         val event = async { runtime.events.first() }
+        runCurrent()
 
         runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
@@ -112,14 +120,16 @@ class RuntimeVoiceWiringTest {
         assertEquals(1, groq.startCount)
         assertEquals(0, system.startCount)
         runtime.cancel()
+        providerScope.cancel()
     }
 
     @Test
     fun `cancel stops whisper capture before transcription`() = runTest {
         val capture = BlockingAudioCapture()
         val transcription = FakeTranscriptionProvider()
+        val providerScope = CoroutineScope(Dispatchers.Unconfined)
         val provider = WhisperSpeechRecognitionProvider(
-            this,
+            providerScope,
             capture,
             transcription,
             { "whisper-large-v3" },
@@ -135,6 +145,7 @@ class RuntimeVoiceWiringTest {
 
         assertTrue(capture.cancelled)
         assertFalse(transcription.called)
+        providerScope.cancel()
     }
 
     @Test
