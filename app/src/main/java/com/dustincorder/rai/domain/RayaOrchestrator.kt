@@ -140,10 +140,15 @@ class RayaOrchestrator(
                     _state.value == RayaState.Idle -> beginVoiceTurn(resetActivity = true)
             }
         } else {
-            speechRecognition.cancel()
             if (_state.value == RayaState.Listening) {
                 _state.value = RayaState.Idle
+                turnEpoch++
+                logVoice(
+                    "voice.micOffTurnInvalidated turnEpoch=$turnEpoch " +
+                        "voiceSessionActive=${_voiceSessionActive.value}",
+                )
             }
+            speechRecognition.cancel()
         }
     }
 

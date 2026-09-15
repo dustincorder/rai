@@ -349,6 +349,39 @@ class RayaOrchestratorTest {
     }
 
     @Test
+    fun `M mic off cancel error from old turn is stale and not fatal`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), FakeReplyProvider())
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        assertFalse(orchestrator.microphoneEnabled.value)
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+
+        recognition.emit(SpeechRecognitionEvent.Error(SpeechRecognitionErrorReason.Other, "Ошибка распознавания речи (5)."))
+        runCurrent()
+
+        assertTrue("voice chat must survive intentional mic-off cancel error", orchestrator.voiceSessionActive.value)
+        assertFalse(orchestrator.microphoneEnabled.value)
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertFalse("no error banner for intentional cancellation", orchestrator.state.value is RayaState.Error)
+
+        val startsBefore = recognition.startCount
+        orchestrator.toggleMicrophone()
+        runCurrent()
+        assertTrue(orchestrator.microphoneEnabled.value)
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+        assertEquals("mic on must start a fresh recognition turn", startsBefore + 1, recognition.startCount)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
     fun `G mic on resumes listening`() = runTest {
         val recognition = FakeRecognitionProvider()
         val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), FakeReplyProvider())

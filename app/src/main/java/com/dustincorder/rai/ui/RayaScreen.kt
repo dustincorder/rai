@@ -1,6 +1,7 @@
 package com.dustincorder.rai.ui
 
 import android.content.res.Configuration
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -66,6 +68,9 @@ import com.dustincorder.rai.presentation.RayaUiState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
 import com.dustincorder.rai.ui.theme.RayaTheme
+
+private val FACE_SCRIM_HEIGHT_DP = 60.dp
+private val EMPTY_CONVERSATION_TOP_PADDING_DP = 360.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -117,32 +122,22 @@ fun RayaScreen(
                 .padding(contentPadding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .weight(1f, fill = true),
             ) {
-                RayaFace(
-                    state = state.face,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 220.dp),
+                ConversationArea(
+                    state = state,
+                    modifier = Modifier.fillMaxSize(),
                 )
-                Spacer(Modifier.height(4.dp))
-                StatusChip(state)
-                if (state.errorMessage != null) {
-                    Spacer(Modifier.height(12.dp))
-                    ErrorBanner(state.errorMessage)
-                }
+                FaceHeader(
+                    state = state,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth(),
+                )
             }
-            ConversationArea(
-                state = state,
-                modifier = Modifier
-                    .weight(1f, fill = true)
-                    .fillMaxWidth()
-                    .padding(top = 18.dp),
-            )
             BottomControls(
                 state = state,
                 draft = draft,
@@ -177,6 +172,50 @@ fun RayaScreen(
                     Text("Отмена")
                 }
             },
+        )
+    }
+}
+
+@Composable
+private fun FaceHeader(
+    state: RayaUiState,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.background(MaterialTheme.colorScheme.background),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            RayaFace(
+                state = state.face,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+            StatusChip(state)
+            if (state.errorMessage != null) {
+                Spacer(Modifier.height(12.dp))
+                ErrorBanner(state.errorMessage)
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(FACE_SCRIM_HEIGHT_DP)
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0f to MaterialTheme.colorScheme.background,
+                            1f to MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                        ),
+                    ),
+                ),
         )
     }
 }
@@ -244,16 +283,16 @@ private fun TextComposer(
                     }),
                 )
                 IconButton(
-                    onClick = onSubmitText,
-                    enabled = draft.isNotBlank(),
+                    onClick = if (draft.isBlank()) onVoiceChatClick else onSubmitText,
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.Send,
-                        contentDescription = "Отправить сообщение",
-                    )
-                }
-                IconButton(onClick = onVoiceChatClick) {
-                    Icon(Icons.Outlined.MicNone, contentDescription = "Голосовой чат")
+                    if (draft.isBlank()) {
+                        Icon(Icons.Outlined.MicNone, contentDescription = "Голосовой чат")
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = "Отправить сообщение",
+                        )
+                    }
                 }
             }
         }
@@ -345,7 +384,9 @@ private fun ConversationArea(
 
     if (messages.isEmpty()) {
         Box(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(top = EMPTY_CONVERSATION_TOP_PADDING_DP),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -362,7 +403,10 @@ private fun ConversationArea(
         state = listState,
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = EMPTY_CONVERSATION_TOP_PADDING_DP,
+            bottom = 16.dp,
+        ),
     ) {
         itemsIndexed(messages, key = { index, _ -> index }) { _, message ->
             when (message.role) {
