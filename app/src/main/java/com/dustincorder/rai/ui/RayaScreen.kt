@@ -59,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -385,24 +386,25 @@ private fun ConversationArea(
     val showTransient = listening && state.userText.isNotBlank() &&
         messages.lastOrNull()?.text != state.userText
     val thinking = state.face.emotion == RayaFaceEmotion.Thinking
-    var followTail by remember { mutableStateOf(true) }
-
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val layout = listState.layoutInfo
-            if (layout.totalItemsCount == 0) {
-                true
-            } else {
-                val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
-                lastVisible >= layout.totalItemsCount - 2
-            }
-        }.collect { followTail = it }
-    }
 
     val items: List<Any> = buildList {
         messages.forEach { add(it) }
         if (showTransient) add(TransientSpeech(state.userText))
         if (thinking) add(ThinkingIndicator)
+    }
+    var followTail by remember { mutableStateOf(true) }
+    val currentItemCount = rememberUpdatedState(items.size)
+
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val total = layout.totalItemsCount
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+            total to (total == 0 || lastVisible >= total - 2)
+        }.collect { (total, atBottom) ->
+            // Ignore transitional samples from the old layout after items change.
+            if (total == currentItemCount.value) followTail = atBottom
+        }
     }
 
     LaunchedEffect(items) {
