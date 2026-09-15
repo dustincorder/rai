@@ -67,7 +67,10 @@ class MainActivity : ComponentActivity() {
                         onEndVoiceSession = { rayaViewModel.endVoiceSession() },
                         onToggleMicrophone = { rayaViewModel.toggleMicrophone() },
                         onInterruptSpeech = { rayaViewModel.interruptSpeech() },
-                        onSettingsClick = { showSettings = true },
+                        onSettingsClick = {
+                            if (uiState.voiceSessionActive) rayaViewModel.endVoiceSession()
+                            showSettings = true
+                        },
                         onClearConversation = { rayaViewModel.clearConversation() },
                     )
                 }

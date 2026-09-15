@@ -1,11 +1,14 @@
 package com.dustincorder.rai.presentation
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.RayaApplication
 import com.dustincorder.rai.domain.RayaOrchestrator
 import com.dustincorder.rai.domain.RayaRoutingDiagnostics
+import com.dustincorder.rai.domain.RayaVoiceDiagnostics
 import com.dustincorder.rai.domain.ReplyProvider
 import com.dustincorder.rai.domain.SpeechRecognitionProvider
 import com.dustincorder.rai.domain.SpeechSynthesisProvider
@@ -21,6 +24,7 @@ class RayaViewModel(
     speechSynthesis: SpeechSynthesisProvider,
     replyProvider: ReplyProvider,
     routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
+    voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
 ) : ViewModel() {
     private val orchestrator = RayaOrchestrator(
         scope = viewModelScope,
@@ -28,6 +32,7 @@ class RayaViewModel(
         speechSynthesis = speechSynthesis,
         replyProvider = replyProvider,
         routingDiagnostics = routingDiagnostics,
+        voiceDiagnostics = voiceDiagnostics,
     )
 
     val uiState: StateFlow<RayaUiState> = combine(
@@ -77,6 +82,18 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
             speechSynthesis = AndroidSpeechSynthesisProvider(application),
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
+            voiceDiagnostics = AndroidRayaVoiceDiagnostics(),
         ) as T
+    }
+}
+
+class AndroidRayaVoiceDiagnostics : RayaVoiceDiagnostics {
+    override fun record(event: String) {
+        if (!BuildConfig.DEBUG) return
+        try {
+            Log.d("Raya-Voice", event)
+        } catch (_: RuntimeException) {
+            // android.util.Log is not mocked in JVM unit tests.
+        }
     }
 }

@@ -498,6 +498,9 @@ class RayaOrchestratorTest {
         reply.complete()
         runCurrent()
         assertEquals(RayaState.Speaking("D"), orchestrator.state.value)
+        synthesis.complete()
+        runCurrent()
+        assertEquals(RayaState.Listening, orchestrator.state.value)
 
         advanceTimeBy(4_000L)
         runCurrent()
@@ -577,7 +580,7 @@ class RayaOrchestratorTest {
             listOf(
                 ConversationMessage(ConversationRole.User, "текстовый вопрос"),
                 ConversationMessage(ConversationRole.Assistant, "B"),
-                ConversationMessage(ConversationRole.User, "голосовой вопрос"),
+                ConversationMessage(ConversationRole.User, "Рая, голосовой вопрос", "голосовой вопрос"),
             ),
             reply.lastMessages,
         )
@@ -647,7 +650,7 @@ class RayaOrchestratorTest {
         assertTrue(orchestrator.state.value is RayaState.Error)
         assertFalse(orchestrator.voiceSessionActive.value)
         assertEquals(
-            listOf(ConversationMessage(ConversationRole.User, "что такое Марс?")),
+            listOf(ConversationMessage(ConversationRole.User, "Рая, что такое Марс?", "что такое Марс?")),
             orchestrator.conversation.value,
         )
         assertTrue(
@@ -694,7 +697,14 @@ class RayaOrchestratorTest {
         recognition.emit(SpeechRecognitionEvent.Final("Рая, Райя, расскажи про Марс", "ru-RU"))
         runCurrent()
 
-        assertEquals(listOf(ConversationMessage(ConversationRole.User, "расскажи про Марс")), reply.lastMessages)
+        assertEquals(
+            listOf(ConversationMessage(ConversationRole.User, "Рая, Райя, расскажи про Марс", "расскажи про Марс")),
+            reply.lastMessages,
+        )
+        assertEquals("semantic LLM text must be the addressed query", "расскажи про Марс",
+            reply.lastMessages?.single()?.contextText)
+        assertEquals("raw voice transcript must be preserved for display", "Рая, Райя, расскажи про Марс",
+            orchestrator.conversation.value.last { it.role == ConversationRole.User }.text)
         assertEquals(1, reply.callCount)
         synthesis.complete()
         runCurrent()
@@ -720,7 +730,7 @@ class RayaOrchestratorTest {
         recognition.emit(SpeechRecognitionEvent.Final("Raya, hello", "en-US"))
         runCurrent()
 
-        assertEquals(listOf(ConversationMessage(ConversationRole.User, "hello")), reply.lastMessages)
+        assertEquals(listOf(ConversationMessage(ConversationRole.User, "Raya, hello", "hello")), reply.lastMessages)
         assertEquals("en-US", reply.lastLanguageTag)
         assertEquals("en-US", synthesis.lastLocale?.toLanguageTag())
         synthesis.complete()
@@ -752,7 +762,7 @@ class RayaOrchestratorTest {
             listOf(
                 ConversationMessage(ConversationRole.User, "A"),
                 ConversationMessage(ConversationRole.Assistant, "B"),
-                ConversationMessage(ConversationRole.User, "C"),
+                ConversationMessage(ConversationRole.User, "Рая, C", "C"),
             ),
             reply.lastMessages,
         )
@@ -779,10 +789,12 @@ class RayaOrchestratorTest {
         runCurrent()
         assertEquals(2, orchestrator.conversation.value.size)
 
+        orchestrator.endVoiceSession()
+        runCurrent()
         orchestrator.clearConversation()
         assertEquals(emptyList<ConversationMessage>(), orchestrator.conversation.value)
 
-        recognition.emit(SpeechRecognitionEvent.Final("C", "ru-RU"))
+        orchestrator.submitText("C")
         runCurrent()
         assertEquals(listOf(ConversationMessage(ConversationRole.User, "C")), reply.lastMessages)
         reply.complete()
@@ -815,9 +827,282 @@ class RayaOrchestratorTest {
 
         assertEquals(RayaOrchestrator.MAX_LLM_CONTEXT_MESSAGES, reply.lastMessages?.size)
         assertEquals(ConversationMessage(ConversationRole.Assistant, "R3"), reply.lastMessages?.first())
-        assertEquals(ConversationMessage(ConversationRole.User, "Q13"), reply.lastMessages?.last())
+        assertEquals(
+            ConversationMessage(ConversationRole.User, "Рая, Q13", "Q13"),
+            reply.lastMessages?.last(),
+        )
         orchestrator.endVoiceSession()
         runCurrent()
+    }
+
+    @Test
+    fun `partials update transient transcript and only one user message lands`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Partial("Рая"))
+        runCurrent()
+        assertEquals("Рая", orchestrator.userText.value)
+        assertTrue("transient partial must not touch conversation history", orchestrator.conversation.value.isEmpty())
+
+        recognition.emit(SpeechRecognitionEvent.Partial("Рая, расскажи"))
+        runCurrent()
+        assertEquals("Рая, расскажи", orchestrator.userText.value)
+        assertTrue(orchestrator.conversation.value.isEmpty())
+
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, расскажи про Марс", "ru-RU"))
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+        assertEquals(1, orchestrator.conversation.value.count { it.role == ConversationRole.User })
+        assertEquals(
+            "Рая, расскажи про Марс",
+            orchestrator.conversation.value.last { it.role == ConversationRole.User }.text,
+        )
+
+        reply.complete()
+        runCurrent()
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `double text submit while first reply pending creates one LLM request`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B", "C"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.submitText("первый")
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+
+        orchestrator.submitText("второй")
+        runCurrent()
+
+        assertEquals(1, reply.callCount)
+        assertEquals(listOf(ConversationMessage(ConversationRole.User, "первый")), reply.lastMessages)
+
+        reply.complete()
+        runCurrent()
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+
+        orchestrator.submitText("третий")
+        runCurrent()
+        assertEquals(2, reply.callCount)
+        assertEquals(
+            listOf(
+                ConversationMessage(ConversationRole.User, "первый"),
+                ConversationMessage(ConversationRole.Assistant, "B"),
+                ConversationMessage(ConversationRole.User, "третий"),
+            ),
+            reply.lastMessages,
+        )
+        reply.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `voice session cannot start during text thinking`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.submitText("вопрос")
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+
+        assertFalse("voice session must not start while a text turn is in flight", orchestrator.voiceSessionActive.value)
+        assertEquals(InteractionMode.Text, orchestrator.interactionMode.value)
+        assertEquals(0, recognition.startCount)
+
+        reply.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `clear conversation is ignored while a text turn is in flight`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.submitText("вопрос")
+        runCurrent()
+        orchestrator.clearConversation()
+        runCurrent()
+
+        assertEquals(
+            listOf(ConversationMessage(ConversationRole.User, "вопрос")),
+            orchestrator.conversation.value,
+        )
+        reply.complete()
+        runCurrent()
+    }
+
+    @Test
+    fun `typed text is sent with null language tag regardless of system locale`() = runTest {
+        val reply = FakeReplyProvider(waitForReply = false, responses = mutableListOf("OK"))
+        val orchestrator = RayaOrchestrator(
+            this,
+            FakeRecognitionProvider(),
+            FakeSynthesisProvider(),
+            reply,
+            systemLanguageTag = { "ru-RU" },
+        )
+
+        orchestrator.submitText("How are you?")
+        runCurrent()
+
+        assertEquals(listOf(ConversationMessage(ConversationRole.User, "How are you?")), reply.lastMessages)
+        assertEquals(null, reply.lastLanguageTag)
+    }
+
+    @Test
+    fun `end voice session during thinking cleans up and blocks late assistant`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, вопрос", "ru-RU"))
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+
+        assertFalse(orchestrator.voiceSessionActive.value)
+        assertEquals(InteractionMode.Text, orchestrator.interactionMode.value)
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertEquals(1, orchestrator.conversation.value.count { it.role == ConversationRole.User })
+        assertTrue(orchestrator.conversation.value.none { it.role == ConversationRole.Assistant })
+
+        reply.complete()
+        runCurrent()
+
+        assertTrue("late reply must not append assistant after session ended", orchestrator.conversation.value.none { it.role == ConversationRole.Assistant })
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+    }
+
+    @Test
+    fun `end voice session during speaking returns cleanly`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, synthesis, reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        recognition.emit(SpeechRecognitionEvent.Final("A", "ru-RU"))
+        runCurrent()
+        reply.complete()
+        runCurrent()
+        assertEquals(RayaState.Speaking("B"), orchestrator.state.value)
+
+        orchestrator.endVoiceSession()
+        runCurrent()
+
+        assertEquals(RayaState.Idle, orchestrator.state.value)
+        assertFalse(orchestrator.voiceSessionActive.value)
+        assertTrue("TTS must be stopped", synthesis.stopCount >= 1)
+        assertEquals(
+            listOf(
+                ConversationMessage(ConversationRole.User, "A"),
+                ConversationMessage(ConversationRole.Assistant, "B"),
+            ),
+            orchestrator.conversation.value,
+        )
+    }
+
+    @Test
+    fun `inactivity timeout is suspended during thinking and speaking and resumes after`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        val synthesis = FakeSynthesisProvider()
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(
+            scope = this,
+            speechRecognition = recognition,
+            speechSynthesis = synthesis,
+            replyProvider = reply,
+            now = { testScheduler.currentTime },
+            inactivityTimeoutMs = { 3_000L },
+        )
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        recognition.emit(SpeechRecognitionEvent.Final("Рая, вопрос", "ru-RU"))
+        runCurrent()
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+        advanceTimeBy(5_000L)
+        runCurrent()
+        assertTrue("session must survive thinking much longer than timeout", orchestrator.voiceSessionActive.value)
+
+        reply.complete()
+        runCurrent()
+        assertEquals(RayaState.Speaking("B"), orchestrator.state.value)
+        advanceTimeBy(5_000L)
+        runCurrent()
+        assertTrue("session must survive speaking much longer than timeout", orchestrator.voiceSessionActive.value)
+
+        synthesis.complete()
+        runCurrent()
+        assertEquals(RayaState.Listening, orchestrator.state.value)
+
+        advanceTimeBy(4_000L)
+        runCurrent()
+        assertFalse("inactivity timeout must fire once the user is waiting again", orchestrator.voiceSessionActive.value)
+        assertTrue(
+            orchestrator.conversation.value.any { it.role == ConversationRole.Notice && it.text == RayaOrchestrator.INACTIVITY_NOTICE_MESSAGE },
+        )
+    }
+
+    @Test
+    fun `event emitted synchronously during startListening is not lost`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        recognition.emitImmediateOnStart = SpeechRecognitionEvent.Final("Рая, ранний", "ru-RU")
+        val reply = FakeReplyProvider(waitForReply = true, responses = mutableListOf("B"))
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), reply)
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+
+        assertEquals(1, recognition.startCount)
+        assertEquals(RayaState.Thinking, orchestrator.state.value)
+        assertEquals(
+            "Рая, ранний",
+            orchestrator.conversation.value.last { it.role == ConversationRole.User }.text,
+        )
+
+        reply.complete()
+        runCurrent()
+        orchestrator.endVoiceSession()
+        runCurrent()
+    }
+
+    @Test
+    fun `startListening direct throw ends session with error and no restart`() = runTest {
+        val recognition = FakeRecognitionProvider()
+        recognition.throwOnStart = true
+        val orchestrator = RayaOrchestrator(this, recognition, FakeSynthesisProvider(), FakeReplyProvider())
+
+        orchestrator.startVoiceSession()
+        runCurrent()
+
+        assertTrue(orchestrator.state.value is RayaState.Error)
+        assertFalse(orchestrator.voiceSessionActive.value)
+        assertEquals(1, recognition.startCount)
+
+        advanceTimeBy(30_000L)
+        runCurrent()
+        assertEquals("no restart loop", 1, recognition.startCount)
     }
 }
 
@@ -827,10 +1112,17 @@ private class FakeRecognitionProvider : SpeechRecognitionProvider {
     var cancelCount = 0
     var startCount = 0
     var lastRequest: RecognitionRequest? = null
+    var emitImmediateOnStart: SpeechRecognitionEvent? = null
+    var throwOnStart = false
 
     override suspend fun startListening(request: RecognitionRequest) {
         lastRequest = request
         startCount++
+        emitImmediateOnStart?.let { event ->
+            emitImmediateOnStart = null
+            _events.emit(event)
+        }
+        if (throwOnStart) throw RuntimeException("startListening failure")
     }
 
     override fun cancel() {

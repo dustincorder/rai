@@ -9,4 +9,5 @@ enum class ConversationRole {
 data class ConversationMessage(
     val role: ConversationRole,
     val text: String,
+    val contextText: String = text,
 )

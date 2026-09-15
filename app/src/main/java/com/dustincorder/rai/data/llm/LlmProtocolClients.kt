@@ -34,7 +34,7 @@ class OpenAiCompatibleReplyProvider(
                 model,
                 buildList {
                     add(OpenAiMessage("system", systemPrompt))
-                    messages.forEach { message -> add(OpenAiMessage(message.role.transport, message.text)) }
+                    messages.forEach { message -> add(OpenAiMessage(message.role.transport, message.contextText)) }
                 },
             ),
         )
@@ -66,7 +66,7 @@ class AnthropicCompatibleReplyProvider(
                 model = model,
                 maxTokens = 512,
                 system = systemPrompt,
-                messages = messages.map { message -> AnthropicMessage(message.role.transport, message.text) },
+                messages = messages.map { message -> AnthropicMessage(message.role.transport, message.contextText) },
             ),
         )
         val request = Request.Builder()
