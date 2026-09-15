@@ -109,7 +109,7 @@ private fun DrawScope.drawFace(
     val centerY = height * (0.48f + gazeY + if (state.emotion == RayaFaceEmotion.Calm) idleDrift * 0.004f else 0f)
     val color = EyeCyan
     val listeningScale = if (state.emotion == RayaFaceEmotion.Listening) 1f + listeningPulse * 0.08f else 1f
-    val speakingScale = if (state.emotion == RayaFaceEmotion.Speaking) 1f + speakingPulse * 0.06f else 1f
+    val speakingScale = if (state.speaking) 1f + speakingPulse * 0.06f else 1f
     val shapeScale = listeningScale * speakingScale
     val eyeHeight = when (state.emotion) {
         RayaFaceEmotion.Surprised -> eyeSize * 1.35f

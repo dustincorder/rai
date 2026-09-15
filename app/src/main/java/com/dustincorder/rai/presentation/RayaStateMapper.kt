@@ -2,10 +2,21 @@ package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.InteractionMode
+import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.presentation.model.RayaFaceState
 import com.dustincorder.rai.presentation.model.RayaGaze
+
+/** Maps the structured semantic emotion onto the existing visual face expressions. */
+fun RayaEmotion.toFaceEmotion(): RayaFaceEmotion = when (this) {
+    RayaEmotion.Calm -> RayaFaceEmotion.Calm
+    RayaEmotion.Happy -> RayaFaceEmotion.Happy
+    RayaEmotion.Curious -> RayaFaceEmotion.Curious
+    RayaEmotion.Concerned -> RayaFaceEmotion.Concerned
+    RayaEmotion.Surprised -> RayaFaceEmotion.Surprised
+    RayaEmotion.Angry -> RayaFaceEmotion.Angry
+}
 
 fun rayaUiStateFor(
     state: RayaState,
@@ -14,9 +25,10 @@ fun rayaUiStateFor(
     interactionMode: InteractionMode = InteractionMode.Text,
     voiceSessionActive: Boolean = false,
     microphoneEnabled: Boolean = true,
+    semanticEmotion: RayaEmotion = RayaEmotion.Calm,
 ): RayaUiState = when (state) {
     RayaState.Idle -> RayaUiState(
-        face = RayaFaceState(),
+        face = RayaFaceState(emotion = semanticEmotion.toFaceEmotion()),
         conversation = conversation,
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
@@ -49,12 +61,14 @@ fun rayaUiStateFor(
     )
     is RayaState.Speaking -> RayaUiState(
         face = RayaFaceState(
-            emotion = RayaFaceEmotion.Speaking,
+            emotion = semanticEmotion.toFaceEmotion(),
             gaze = RayaGaze.Center,
+            speaking = true,
         ),
         status = "Говорю",
         conversation = conversation,
         isBusy = true,
+        isSpeaking = true,
         interactionMode = interactionMode,
         voiceSessionActive = voiceSessionActive,
         microphoneEnabled = microphoneEnabled,

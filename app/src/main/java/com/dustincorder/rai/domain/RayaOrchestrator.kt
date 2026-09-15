@@ -63,6 +63,12 @@ class RayaOrchestrator(
     private val _microphoneEnabled = MutableStateFlow(true)
     val microphoneEnabled: StateFlow<Boolean> = _microphoneEnabled.asStateFlow()
 
+    private val _semanticEmotion = MutableStateFlow(RayaEmotion.Calm)
+    val semanticEmotion: StateFlow<RayaEmotion> = _semanticEmotion.asStateFlow()
+
+    private val _lastResponseLanguageTag = MutableStateFlow<String?>(null)
+    val lastResponseLanguageTag: StateFlow<String?> = _lastResponseLanguageTag.asStateFlow()
+
     private var sessionJob: Job? = null
     private var activeTurnJob: Job? = null
     private var turnEpoch = 0
@@ -96,7 +102,9 @@ class RayaOrchestrator(
                     val response = replyProvider.reply(conversationContext(), languageTag)
                     if (_voiceSessionActive.value) return@launch
                     if (!textTurnInFlight) return@launch
-                    _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response))
+                    _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
+                    _semanticEmotion.value = response.emotion
+                    _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
                     _state.value = RayaState.Idle
                 } catch (cancellation: CancellationException) {
                     throw cancellation
@@ -122,6 +130,8 @@ class RayaOrchestrator(
         _voiceSessionActive.value = true
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Voice
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
         sessionJob = SupervisorJob(scope.coroutineContext[Job] ?: Job())
         record(
             "voice.startSession turnEpoch=$turnEpoch voiceSessionActive=${_voiceSessionActive.value} " +
@@ -200,6 +210,8 @@ class RayaOrchestrator(
         if (_voiceSessionActive.value) return
         if (textTurnInFlight) return
         _conversation.value = emptyList()
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
     }
 
     fun close() {
@@ -345,11 +357,20 @@ class RayaOrchestrator(
         }
 
         if (isStaleEpoch(epoch, "highlight")) return
-        _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response))
-        _state.value = RayaState.Speaking(response)
+        _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
+        _semanticEmotion.value = response.emotion
+        _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
+        _state.value = RayaState.Speaking(response.text)
 
+        val ttsLanguageTag = response.languageTag
+            ?.takeIf { it.isValidLanguageTag() }
+            ?: resolvedLanguageTag
+        record(
+            "voice.speak epoch=$epoch responseLanguageTag=${response.languageTag ?: "null"} " +
+                "ttsLanguageTag=$ttsLanguageTag emotion=${response.emotion}",
+        )
         val outcome = runCatching {
-            speechSynthesis.speak(response, Locale.forLanguageTag(resolvedLanguageTag))
+            speechSynthesis.speak(response.text, Locale.forLanguageTag(ttsLanguageTag))
         }
         if (isStaleEpoch(epoch, "speak")) return
         currentCoroutineContext().ensureActive()

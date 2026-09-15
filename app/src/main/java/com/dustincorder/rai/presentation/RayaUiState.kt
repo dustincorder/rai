@@ -11,6 +11,7 @@ data class RayaUiState(
     val conversation: List<ConversationMessage> = emptyList(),
     val errorMessage: String? = null,
     val isBusy: Boolean = false,
+    val isSpeaking: Boolean = false,
     val interactionMode: InteractionMode = InteractionMode.Text,
     val voiceSessionActive: Boolean = false,
     val microphoneEnabled: Boolean = true,

@@ -33,15 +33,15 @@ class ConversationLanguageTest {
 
     @Test
     fun `local name response uses primary language subtag`() {
-        assertEquals("Я здесь.", localNameResponse("ru-RU"))
-        assertEquals("Я тут.", localNameResponse("uk-UA"))
-        assertEquals("I'm here.", localNameResponse("en-US"))
-        assertEquals("I'm here.", localNameResponse("en-GB"))
+        assertEquals("Я здесь.", localNameResponse("ru-RU").text)
+        assertEquals("Я тут.", localNameResponse("uk-UA").text)
+        assertEquals("I'm here.", localNameResponse("en-US").text)
+        assertEquals("I'm here.", localNameResponse("en-GB").text)
     }
 
     @Test
     fun `local name response falls back for unknown language`() {
-        assertEquals("Я здесь.", localNameResponse("de-DE"))
-        assertEquals("Я здесь.", localNameResponse(null))
+        assertEquals("Я здесь.", localNameResponse("de-DE").text)
+        assertEquals("Я здесь.", localNameResponse(null).text)
     }
 }

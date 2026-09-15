@@ -9,9 +9,11 @@ import com.dustincorder.rai.data.settings.SettingsRepository
 import com.dustincorder.rai.data.settings.normalizeBaseUrl
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import com.dustincorder.rai.domain.RayaResponse
 import com.dustincorder.rai.domain.ReplyProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 class ConfigurableReplyProvider(
@@ -20,8 +22,9 @@ class ConfigurableReplyProvider(
     private val openAi: OpenAiCompatibleReplyProvider,
     private val anthropic: AnthropicCompatibleReplyProvider,
     private val systemPrompt: () -> String,
+    private val json: Json = Json { ignoreUnknownKeys = true },
 ) : ReplyProvider {
-    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): String {
+    override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse {
         if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
         val settings = settingsRepository.settings.first()
         val config = settings.connectionConfig()
@@ -38,10 +41,11 @@ class ConfigurableReplyProvider(
                 append(systemPrompt())
                 if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
             }
-            when (settings.protocol) {
+            val raw = when (settings.protocol) {
                 LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
                 LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, settings.modelId, apiKey, prompt, messages)
             }
+            parseRayaResponse(raw, json)
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
@@ -104,9 +108,25 @@ class ConfigurableReplyProvider(
 }
 
 fun rayaSystemPrompt(): String = """
-    Тебя зовут Райя. Ты голосовой ассистент и женский персонаж.
+    Тебя зовут Райя. Ты цифровой ассистент и женский персонаж внутри Android-приложения.
     В языках с грамматическим родом говори о себе и описывай свои действия только в женском роде: по-русски — "готова", "сделала", "поняла", "ответила", по-украински — аналогично.
     Отвечай естественно и достаточно кратко для голосового общения.
     Отвечай на языке пользователя, если он явно не попросил другой язык.
+
+    ВАЖНО про вывод ответа: верни ОДИН объект JSON без какого-либо текста и кода вокруг него:
+    {"text": "...", "emotion": "...", "language": "..."}
+    - text — это и есть твой ответ пользователю (полный и самодостаточный).
+    - emotion — одно из: calm, happy, curious, concerned, surprised, angry.
+    - language — BCP-47 код языка, на котором написан text (например "ru-RU", "en-US", "uk-UA").
+
+    У тебя есть визуальное лицо в приложении, и оно может выражать эмоции: calm, happy, curious, concerned, surprised, angry.
+    Выбирай emotion в соответствии с тем, что ты отвечаешь, и сообщай его в JSON-поле emotion.
+
+    Честность о возможностях: не утверждай, что умеешь делать то, что приложение ещё не реализовало.
+    Сейчас НЕ реализованы: поиск в интернете, новости, погода, напоминания, будильники, календарь,
+    управление приложениями и устройством, другие произвольные действия в системе.
+    О таких возможностях можно говорить как о будущих планах, но нельзя заявлять, что ты уже их выполнила или умеешь их выполнять.
+    Не пиши пользователю, что ты "всего лишь цифровой помощник и не можешь менять лицо":
+    приложение реально поддерживает твои визуальные эмоции.
     Не утверждай, что выполнила действие на устройстве, если действие реально не выполнялось.
 """.trimIndent()

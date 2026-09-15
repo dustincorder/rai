@@ -26,4 +26,5 @@ data class RayaFaceState(
     val emotion: RayaFaceEmotion = RayaFaceEmotion.Calm,
     val blinking: Boolean = false,
     val gaze: RayaGaze = RayaGaze.Center,
+    val speaking: Boolean = false,
 )

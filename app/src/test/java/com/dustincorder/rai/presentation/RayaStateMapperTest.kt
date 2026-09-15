@@ -2,10 +2,13 @@ package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RayaStateMapperTest {
@@ -25,10 +28,61 @@ class RayaStateMapperTest {
     }
 
     @Test
-    fun `speaking maps to speaking face`() {
-        val state = rayaUiStateFor(RayaState.Speaking("test"))
+    fun `speaking maps to the semantic emotion face with speaking animation`() {
+        val state = rayaUiStateFor(
+            RayaState.Speaking("test"),
+            semanticEmotion = RayaEmotion.Happy,
+        )
 
-        assertEquals(RayaFaceEmotion.Speaking, state.face.emotion)
+        assertEquals(RayaFaceEmotion.Happy, state.face.emotion)
+        assertTrue("speaking animation flag must be set", state.face.speaking)
+        assertTrue(state.isSpeaking)
+    }
+
+    @Test
+    fun `error still has priority over semantic emotion`() {
+        val state = rayaUiStateFor(
+            RayaState.Error("failure"),
+            semanticEmotion = RayaEmotion.Happy,
+        )
+
+        assertEquals(RayaFaceEmotion.Error, state.face.emotion)
+        assertFalse(state.face.speaking)
+    }
+
+    @Test
+    fun `listening and thinking interaction states override semantic emotion`() {
+        assertEquals(
+            RayaFaceEmotion.Listening,
+            rayaUiStateFor(RayaState.Listening, semanticEmotion = RayaEmotion.Angry).face.emotion,
+        )
+        assertEquals(
+            RayaFaceEmotion.Thinking,
+            rayaUiStateFor(RayaState.Thinking, semanticEmotion = RayaEmotion.Surprised).face.emotion,
+        )
+    }
+
+    @Test
+    fun `after response idle shows semantic emotion`() {
+        val state = rayaUiStateFor(RayaState.Idle, semanticEmotion = RayaEmotion.Concerned)
+
+        assertEquals(RayaFaceEmotion.Concerned, state.face.emotion)
+        assertFalse(state.isSpeaking)
+    }
+
+    @Test
+    fun `each semantic emotion maps to the expected face`() {
+        val mapping = mapOf(
+            RayaEmotion.Calm to RayaFaceEmotion.Calm,
+            RayaEmotion.Happy to RayaFaceEmotion.Happy,
+            RayaEmotion.Curious to RayaFaceEmotion.Curious,
+            RayaEmotion.Concerned to RayaFaceEmotion.Concerned,
+            RayaEmotion.Surprised to RayaFaceEmotion.Surprised,
+            RayaEmotion.Angry to RayaFaceEmotion.Angry,
+        )
+        mapping.forEach { (emotion, face) ->
+            assertEquals(face, emotion.toFaceEmotion())
+        }
     }
 
     @Test

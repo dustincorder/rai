@@ -346,7 +346,7 @@ private fun VoiceControls(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (state.face.emotion == RayaFaceEmotion.Speaking) {
+                if (state.isSpeaking) {
                     IconButton(onClick = onInterruptSpeech) {
                         Icon(Icons.Outlined.Stop, contentDescription = "Остановить речь")
                     }
