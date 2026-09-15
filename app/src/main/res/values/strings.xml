@@ -34,4 +34,5 @@
     <string name="microphone_permission_denied">Microphone permission was not granted.</string>
     <string name="custom_model">Custom Model</string><string name="custom_model_id">Custom model ID</string><string name="refresh_models">Refresh models</string>
     <string name="voice_section">Voice</string><string name="stt_model">STT model</string><string name="stt_model_hint">Groq Whisper models are used for recorded-audio transcription.</string>
+    <string name="local_neural_unavailable">Local Neural is unavailable until a model with verified redistribution rights is configured.</string>
 </resources>

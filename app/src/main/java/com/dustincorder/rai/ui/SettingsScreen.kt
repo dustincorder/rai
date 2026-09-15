@@ -57,6 +57,7 @@ import com.dustincorder.rai.data.llm.DiscoveredModel
 import com.dustincorder.rai.data.llm.ModelListState
 import com.dustincorder.rai.data.llm.chatModels
 import com.dustincorder.rai.domain.TtsEngine
+import com.dustincorder.rai.speech.TtsModelCatalog
 import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
@@ -266,10 +267,17 @@ fun SettingsScreen(
                     )
                     Text("TTS engine", style = MaterialTheme.typography.labelMedium)
                     ChipGrid(
-                        TtsEngine.entries,
+                        TtsEngine.entries.filter { it != TtsEngine.LocalNeural || TtsModelCatalog.localNeuralAvailable },
                         draft.ttsEngine,
                         { if (it == TtsEngine.LocalNeural) "Local Neural" else "System" },
                     ) { draft = draft.copy(ttsEngine = it) }
+                    if (!TtsModelCatalog.localNeuralAvailable) {
+                        Text(
+                            stringResource(R.string.local_neural_unavailable),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
