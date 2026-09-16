@@ -10,6 +10,7 @@ import com.dustincorder.rai.domain.BargeInHandoff
 import com.dustincorder.rai.domain.BargeInHandoffGate
 import com.dustincorder.rai.domain.VoiceActivityDetector
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.ArrayDeque
 import kotlin.concurrent.thread
 
@@ -23,11 +24,13 @@ class AndroidBargeInMonitor(
 ) : BargeInMonitor {
     private val assetManager = context.assets
     private val running = AtomicBoolean(false)
+    private val generation = AtomicLong(0L)
     private var worker: Thread? = null
     private var recorder: AudioRecord? = null
 
     override fun start(onConfirmedSpeech: (BargeInHandoff) -> Unit) {
         stop()
+        val workerGeneration = generation.incrementAndGet()
         running.set(true)
         val handoffGate = BargeInHandoffGate()
         worker = thread(name = "raya-barge-in", start = true) {
@@ -50,6 +53,10 @@ class AndroidBargeInMonitor(
                 running.set(false)
                 return@thread
             }
+            if (generation.get() != workerGeneration || !running.get()) {
+                localRecorder.release()
+                return@thread
+            }
             recorder = localRecorder
             val echo = runCatching { AcousticEchoCanceler.create(localRecorder.audioSessionId) }.getOrNull()
             val noise = runCatching { NoiseSuppressor.create(localRecorder.audioSessionId) }.getOrNull()
@@ -66,7 +73,7 @@ class AndroidBargeInMonitor(
             val maxPreRollSamples = sampleRate / 2
             try {
                 localRecorder.startRecording()
-                while (running.get()) {
+                while (running.get() && generation.get() == workerGeneration) {
                     val count = localRecorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (count <= 0) continue
                     val frame = buffer.copyOf(count)
@@ -82,7 +89,9 @@ class AndroidBargeInMonitor(
                             handoffBytes[index * 2 + 1] = (sample.toInt() ushr 8).toByte()
                         }
                         val handoff = BargeInHandoff(handoffBytes, sampleRate, 1)
-                        handoffGate.claim(handoff)?.let(onConfirmedSpeech)
+                        if (generation.get() == workerGeneration) {
+                            handoffGate.claim(handoff)?.let(onConfirmedSpeech)
+                        }
                         return@thread
                     }
                 }
@@ -92,12 +101,13 @@ class AndroidBargeInMonitor(
                 echo?.release()
                 noise?.release()
                 speechClassifier?.release()
-                recorder = null
+                if (generation.get() == workerGeneration) recorder = null
             }
         }
     }
 
     override fun stop() {
+        generation.incrementAndGet()
         running.set(false)
         runCatching { recorder?.stop() }
         worker?.interrupt()

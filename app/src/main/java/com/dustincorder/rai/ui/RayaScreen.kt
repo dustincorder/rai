@@ -690,7 +690,7 @@ private fun StatusChip(state: RayaUiState) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                state.status,
+                stringResource(state.statusResId),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
             )

@@ -451,6 +451,7 @@ class RayaOrchestrator(
         bargeInMonitor?.start barge@{ handoff ->
             val parent = sessionJob ?: return@barge
             scope.launch(parent) {
+                if (isStaleEpoch(epoch, "bargeIn")) return@launch
                 if (_state.value !is RayaState.Speaking) return@launch
                 record("voice.bargeIn confirmed")
                 speechSynthesis.stop()

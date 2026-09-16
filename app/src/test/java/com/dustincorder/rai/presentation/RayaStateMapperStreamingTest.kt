@@ -7,7 +7,7 @@ import org.junit.Test
 class RayaStateMapperStreamingTest {
     @Test
     fun `thinking status changes after first visible streamed text`() {
-        assertEquals("Размышляю", rayaUiStateFor(RayaState.Thinking).status)
-        assertEquals("Отвечаю", rayaUiStateFor(RayaState.Thinking, streamingText = "Привет").status)
+        assertEquals(com.dustincorder.rai.R.string.status_thinking, rayaUiStateFor(RayaState.Thinking).statusResId)
+        assertEquals(com.dustincorder.rai.R.string.status_answering, rayaUiStateFor(RayaState.Thinking, streamingText = "Привет").statusResId)
     }
 }
