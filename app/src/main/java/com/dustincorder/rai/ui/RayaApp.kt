@@ -172,7 +172,7 @@ private fun OnboardingScreen(
     onSave: suspend (AppSettings, String) -> Result<Unit>,
     onComplete: suspend () -> Unit,
 ) {
-    val totalSteps = 7
+    val totalSteps = ONBOARDING_STEP_COUNT
     var step by remember { mutableIntStateOf(0) }
     var draft by remember(stored) { mutableStateOf(stored) }
     var apiKey by remember { mutableStateOf("") }
@@ -184,14 +184,10 @@ private fun OnboardingScreen(
         R.string.onboarding_welcome_title,
         R.string.onboarding_appearance_title,
         R.string.onboarding_ai_title,
-        R.string.onboarding_model_title,
         R.string.onboarding_voice_title,
         R.string.onboarding_personality_title,
         R.string.onboarding_done_title,
     )
-    LaunchedEffect(step, draft.provider) {
-        if (step == 3) onRefreshModels(draft, apiKey)
-    }
     BackHandler(enabled = step > 0 && !saving) { previousOnboardingStep(step)?.let { step = it } }
 
     Scaffold(
@@ -226,7 +222,7 @@ private fun OnboardingScreen(
                                 step++
                             }
                         },
-                        enabled = !saving && (step != 2 || canContinueAi(draft, apiKey, apiKeyStatusProvider, apiKeyStatus)),
+                        enabled = !saving && (step != 2 || canContinueAiSetup(draft, apiKey, apiKeyStatusProvider, apiKeyStatus)),
                         modifier = Modifier.weight(1f),
                         shape = com.dustincorder.rai.ui.designsystem.RayaShapes.Control,
                     ) {
@@ -255,14 +251,21 @@ private fun OnboardingScreen(
                             ) { draft = draft.copy(appearanceMode = it); onAppearanceChanged(it) }
                             2 -> AiSetup(
                                 draft, apiKey, apiKeyStatus, apiKeyStatusProvider,
-                                onProviderChanged = { draft = draft.copy(provider = it, modelId = it.defaultModel); apiKey = ""; onProviderChanged(it) },
+                                modelListState = modelListState,
+                                onRefreshModels = { onRefreshModels(draft, apiKey) },
+                                onProviderChanged = {
+                                    val next = draft.copy(provider = it, modelId = it.defaultModel, useCustomModel = false, customModelId = "")
+                                    draft = next
+                                    apiKey = ""
+                                    onProviderChanged(it)
+                                    onRefreshModels(next, "")
+                                },
                                 onDraft = { draft = it },
                                 onKey = { apiKey = it },
                             )
-                            3 -> ModelStep(draft, modelListState, { draft = it })
-                            4 -> Text(stringResource(R.string.onboarding_system_tts))
-                            5 -> Text(stringResource(R.string.onboarding_personality_body))
-                            6 -> Text(stringResource(R.string.onboarding_done_body))
+                            3 -> Text(stringResource(R.string.onboarding_system_tts))
+                            4 -> Text(stringResource(R.string.onboarding_personality_body))
+                            5 -> Text(stringResource(R.string.onboarding_done_body))
                         }
                     }
                 }
@@ -272,14 +275,6 @@ private fun OnboardingScreen(
     }
 }
 
-private fun canContinueAi(
-    draft: AppSettings,
-    typedKey: String,
-    statusProvider: LlmProviderPreset?,
-    status: ApiKeyStatus,
-): Boolean = !draft.provider.requiresApiKey || typedKey.isNotBlank() ||
-    (statusProvider == draft.provider && status == ApiKeyStatus.Configured)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AiSetup(
@@ -287,6 +282,8 @@ private fun AiSetup(
     apiKey: String,
     apiKeyStatus: ApiKeyStatus,
     apiKeyStatusProvider: LlmProviderPreset?,
+    modelListState: ModelListState,
+    onRefreshModels: () -> Unit,
     onProviderChanged: (LlmProviderPreset) -> Unit,
     onDraft: (AppSettings) -> Unit,
     onKey: (String) -> Unit,
@@ -341,11 +338,12 @@ private fun AiSetup(
                 Text(stringResource(R.string.unsafe_http_warning), style = MaterialTheme.typography.bodySmall)
             }
         }
+        ModelStep(draft, modelListState, onDraft, onRefreshModels)
     }
 }
 
 @Composable
-private fun ModelStep(draft: AppSettings, state: ModelListState, onDraft: (AppSettings) -> Unit) {
+private fun ModelStep(draft: AppSettings, state: ModelListState, onDraft: (AppSettings) -> Unit, onOpen: () -> Unit) {
     val models = when (state) {
         is ModelListState.Loaded -> state.models.chatModels()
         is ModelListState.Cached -> state.models.chatModels()
@@ -358,7 +356,13 @@ private fun ModelStep(draft: AppSettings, state: ModelListState, onDraft: (AppSe
         options = models.map { it.id } + "__custom__",
         optionLabel = { if (it == "__custom__") stringResource(R.string.custom_model) else it },
         onSelect = { if (it == "__custom__") onDraft(draft.copy(useCustomModel = true)) else onDraft(draft.copy(modelId = it, useCustomModel = false)) },
+        onOpen = onOpen,
     )
+    when (state) {
+        ModelListState.Loading -> Text(stringResource(R.string.model_discovery_loading))
+        is ModelListState.Failed -> Text(stringResource(R.string.model_discovery_failed), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else -> Unit
+    }
     if (draft.useCustomModel) {
         OutlinedTextField(
             value = draft.customModelId,
@@ -377,9 +381,13 @@ private fun <T> RayaExposedSelector(
     options: List<T>,
     optionLabel: @Composable (T) -> String,
     onSelect: (T) -> Unit,
+    onOpen: () -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = {
+        expanded = !expanded
+        if (expanded) onOpen()
+    }) {
         OutlinedTextField(
             value = value,
             onValueChange = {},
