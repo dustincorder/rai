@@ -1,0 +1,44 @@
+<resources>
+    <string name="app_name">Raya</string>
+    <string name="settings">Settings</string>
+    <string name="back">Back</string>
+    <string name="clear_conversation">Clear conversation</string>
+    <string name="settings_title">Settings</string>
+    <string name="clear_conversation_title">Clear conversation?</string>
+    <string name="clear_conversation_message">Current conversation history will be deleted.</string>
+    <string name="clear">Clear</string>
+    <string name="cancel">Cancel</string>
+    <string name="message_placeholder">Write a message…</string>
+    <string name="voice_chat">Voice chat</string>
+    <string name="send_message">Send message</string>
+    <string name="stop_speech">Stop speech</string>
+    <string name="end_voice_chat">End voice chat</string>
+    <string name="llm">LLM</string>
+    <string name="provider">Provider</string>
+    <string name="protocol">Protocol</string>
+    <string name="base_url">Base URL</string>
+    <string name="model_id">Model ID</string>
+    <string name="api_key">API key</string>
+    <string name="delete_key">Delete key</string>
+    <string name="language">Language</string>
+    <string name="language_auto">Conversation language is detected automatically.</string>
+    <string name="save">Save</string>
+    <string name="test_connection">Test</string>
+    <string name="checking_connection">Checking connection…</string>
+    <string name="api_key_configured">API key configured</string>
+    <string name="api_key_missing">API key not configured</string>
+    <string name="api_key_replace">Enter a new key to replace it</string>
+    <string name="api_key_enter">Enter API key</string>
+    <string name="unsafe_http">Allow insecure HTTP</string>
+    <string name="unsafe_http_warning">HTTP does not encrypt requests or API keys. Use only with a trusted local server.</string>
+    <string name="microphone_permission_denied">Microphone permission was not granted.</string>
+    <string name="custom_model">Custom Model</string><string name="custom_model_id">Custom model ID</string><string name="refresh_models">Refresh models</string>
+    <string name="voice_section">Voice</string><string name="stt_model">STT model</string><string name="stt_model_hint">Groq Whisper models are used for recorded-audio transcription.</string>
+    <string name="local_neural_unavailable">Local Neural is unavailable until a model with verified redistribution rights is configured.</string>
+    <string name="stt_engine">STT engine</string><string name="tts_engine">TTS engine</string><string name="system_engine">System</string>
+    <string name="show_key">Show key</string><string name="hide_key">Hide key</string><string name="api_key_saved">API key saved</string><string name="api_key_not_saved">API key not saved</string><string name="api_key_unreadable">Saved API key could not be read. Replace or delete it.</string>
+    <string name="status_ready">Ready to talk</string><string name="status_listening">Listening</string><string name="status_thinking">Thinking</string><string name="status_answering">Answering</string><string name="status_speaking">Speaking</string><string name="status_error">System error</string><string name="local_neural_engine">Local Neural</string>
+    <string name="assistant_name">Raya</string><string name="assistant_subtitle">Voice assistant</string><string name="empty_conversation">Start a conversation with Raya.</string><string name="user_label">You</string>
+    <string name="mic_off">Turn microphone off</string><string name="mic_on">Turn microphone on</string>
+    <string name="error_reply_unavailable">Could not get a reply.</string><string name="error_recognition_start">Could not start speech recognition.</string><string name="error_recognition">Speech recognition failed.</string><string name="error_voice_pipeline">Voice pipeline failed.</string><string name="notice_inactivity">Voice chat ended because of inactivity.</string>
+</resources>

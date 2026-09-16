@@ -5,8 +5,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.RayaApplication
 import com.dustincorder.rai.data.llm.ConfigurableReplyProvider
+import com.dustincorder.rai.data.llm.DiscoveredModel
 import com.dustincorder.rai.data.llm.LlmConnectionResult
+import com.dustincorder.rai.data.llm.LlmErrorClassifier
+import com.dustincorder.rai.data.llm.LlmModelDiscovery
+import com.dustincorder.rai.data.llm.ModelListState
 import com.dustincorder.rai.data.llm.connectionConfig
+import com.dustincorder.rai.data.llm.withSelectedPresent
 import com.dustincorder.rai.data.secrets.ApiKeyStorageException
 import com.dustincorder.rai.data.secrets.ApiKeyStore
 import com.dustincorder.rai.data.settings.AppSettings
@@ -38,6 +43,7 @@ class SettingsViewModel(
     private val repository: SettingsRepository,
     private val apiKeyStore: ApiKeyStore,
     private val replyProvider: ConfigurableReplyProvider,
+    private val modelDiscovery: LlmModelDiscovery,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = repository.settings.stateIn(
         viewModelScope,
@@ -46,6 +52,7 @@ class SettingsViewModel(
     )
     val connectionStatus = MutableStateFlow<ConnectionStatus>(ConnectionStatus.None)
     val apiKeyStatus = MutableStateFlow<ApiKeyStatus>(ApiKeyStatus.Unknown)
+    val modelListState = MutableStateFlow<ModelListState>(ModelListState.Cached(emptyList()))
 
     init {
         viewModelScope.launch {
@@ -108,6 +115,46 @@ class SettingsViewModel(
         }
     }
 
+    /**
+     * Refreshes the provider model list. Cached ids are shown immediately; a failed
+     * refresh never erases the saved selection and never bricks Settings.
+     */
+    fun refreshModelList(settings: AppSettings, draftApiKey: String) {
+        viewModelScope.launch {
+            val cachedIds = repository.modelCache.first()[settings.provider.name].orEmpty()
+            val cached = cachedIds.map { DiscoveredModel(it) }
+            modelListState.value = ModelListState.Loading
+            if (cached.isNotEmpty()) modelListState.value = ModelListState.Cached(cached)
+            val validated = runCatching { settings.validated() }.getOrElse {
+                modelListState.value = ModelListState.Failed(
+                    it.message ?: "Проверьте настройки провайдера.",
+                    cached,
+                )
+                return@launch
+            }
+            val key = draftApiKey.takeIf { it.isNotBlank() }
+                ?: runCatching { apiKeyStore.read(validated.provider) }.getOrNull()
+            try {
+                val models = modelDiscovery.listModels(
+                    provider = validated.provider,
+                    protocol = validated.protocol,
+                    baseUrl = validated.baseUrl,
+                    apiKey = key,
+                    allowInsecureHttp = validated.customAllowInsecureHttp,
+                )
+                repository.saveModelCache(validated.provider.name, models.map { it.id })
+                modelListState.value = ModelListState.Loaded(models)
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                modelListState.value = ModelListState.Failed(
+                    LlmErrorClassifier.userMessage(failure),
+                    cached,
+                )
+            }
+        }
+    }
+
     private suspend fun keyStatusOf(provider: LlmProviderPreset): ApiKeyStatus = try {
         if (apiKeyStore.isConfigured(provider)) ApiKeyStatus.Configured else ApiKeyStatus.Missing
     } catch (_: ApiKeyStorageException) {
@@ -141,6 +188,7 @@ class SettingsViewModelFactory(private val application: RayaApplication) : ViewM
             application.settingsRepository,
             application.apiKeyStore,
             application.replyProvider,
+            application.modelDiscovery,
         ) as T
     }
 }

@@ -22,7 +22,7 @@ fun AppSettings.connectionConfig(): LlmConnectionConfig = LlmConnectionConfig(
     provider = provider,
     protocol = protocol,
     baseUrl = baseUrl,
-    modelId = modelId,
+    modelId = resolvedModelId(),
     allowInsecureHttp = customAllowInsecureHttp,
 )
 

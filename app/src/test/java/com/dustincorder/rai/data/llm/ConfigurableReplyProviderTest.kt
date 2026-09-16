@@ -11,9 +11,11 @@ import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaResponse
+import com.dustincorder.rai.domain.ReplyEvent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -55,6 +57,7 @@ class ConfigurableReplyProviderTest {
             keyStore,
             OpenAiCompatibleReplyProvider(client, json),
             AnthropicCompatibleReplyProvider(client, json),
+            GeminiReplyProvider(client, json),
             { "System" },
         )
     }
@@ -343,6 +346,50 @@ class ConfigurableReplyProviderTest {
         assertEquals(RayaResponse("Привет из Anthropic!", RayaEmotion.Surprised, "ru-RU"), response)
     }
 
+    @Test
+    fun `openai sse stream emits visible deltas then validated completion`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                """{"choices":[{"message":{"role":"assistant","content":"{\"text\":\"Привет\",\"emotion\":\"happy\",\"language\":\"ru-RU\"}"}}]}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"text\\\":\\\"При\"}}}]}\n" +
+                    "\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"вет\\\",\\\"emotion\\\":\\\"happy\\\",\\\"language\\\":\\\"ru-RU\\\"}}}]}}\n" +
+                    "\n" +
+                "data: [DONE]\n",
+            ),
+        )
+        val events = provider.streamReply(userMsg("hello"), "en-US").toList()
+
+        val deltas = events.filterIsInstance<ReplyEvent.TextDelta>()
+        val completed = events.filterIsInstance<ReplyEvent.Completed>()
+        assertEquals("Привет", deltas.joinToString("") { it.text })
+        assertEquals(1, completed.size)
+        assertEquals(RayaResponse("Привет", RayaEmotion.Happy, "ru-RU"), completed.single().response)
+        assertTrue(deltas.none { it.text.contains("emotion") })
+    }
+
+    @Test
+    fun `anthropic adapts non streaming into single completion`() = runTest {
+        repository.save(custom(LlmProtocol.AnthropicCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse().setBody(
+                """{"content":[{"type":"text","text":"{\"text\":\"Hi\",\"emotion\":\"calm\"}"}]}""",
+            ),
+        )
+        val events = provider.streamReply(userMsg("hello"), "en-US").toList()
+
+        assertEquals(2, events.size)
+        val completed = events.last() as ReplyEvent.Completed
+        assertEquals("Hi", completed.response.text)
+    }
+
     private fun custom(protocol: LlmProtocol) = AppSettings(
         provider = LlmProviderPreset.Custom,
         customProtocol = protocol,
@@ -356,10 +403,16 @@ private class FakeSettingsRepository(initial: AppSettings) : SettingsRepository 
     private val state = MutableStateFlow(initial)
     override val settings: Flow<AppSettings> = state
     var saveCount = 0
+    private val cache = MutableStateFlow(emptyMap<String, List<String>>())
+    override val modelCache: Flow<Map<String, List<String>>> = cache
 
     override suspend fun save(settings: AppSettings) {
         saveCount++
         state.value = settings
+    }
+
+    override suspend fun saveModelCache(providerName: String, modelIds: List<String>) {
+        cache.value = cache.value + (providerName to modelIds)
     }
 
     override suspend fun currentLanguage(): ConversationLanguage = state.value.conversationLanguage

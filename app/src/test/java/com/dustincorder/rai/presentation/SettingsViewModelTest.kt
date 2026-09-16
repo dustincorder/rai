@@ -1,6 +1,9 @@
 package com.dustincorder.rai.presentation
 
 import com.dustincorder.rai.data.llm.ConfigurableReplyProvider
+import com.dustincorder.rai.data.llm.DefaultLlmModelDiscovery
+import com.dustincorder.rai.data.llm.GeminiReplyProvider
+import com.dustincorder.rai.data.llm.ModelListState
 import com.dustincorder.rai.data.llm.OpenAiCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.AnthropicCompatibleReplyProvider
 import com.dustincorder.rai.data.secrets.ApiKeyStorageException
@@ -15,6 +18,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.resetMain
@@ -64,8 +68,10 @@ class SettingsViewModelTest {
                 keyStore,
                 OpenAiCompatibleReplyProvider(client, json),
                 AnthropicCompatibleReplyProvider(client, json),
+                GeminiReplyProvider(client, json),
                 { "System" },
             ),
+            DefaultLlmModelDiscovery(client, json, GeminiReplyProvider(client, json)),
         )
     }
 
@@ -108,7 +114,7 @@ class SettingsViewModelTest {
     @Test
     fun `restart-like recreation shows saved key indicator`() = runBlocking {
         keyStore.storedKey = "saved"
-        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider(), viewModelDiscovery())
 
         assertEquals(ApiKeyStatus.Configured, awaitKeyStatus(recreated, ApiKeyStatus.Configured))
     }
@@ -116,7 +122,7 @@ class SettingsViewModelTest {
     @Test
     fun `missing key shows not saved indicator`() = runBlocking {
         keyStore.storedKey = null
-        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider(), viewModelDiscovery())
 
         assertEquals(ApiKeyStatus.Missing, awaitKeyStatus(recreated, ApiKeyStatus.Missing))
     }
@@ -156,7 +162,7 @@ class SettingsViewModelTest {
     fun `unreadable stored key surfaces unreadable indicator`() = runBlocking {
         keyStore.storedKey = "saved"
         keyStore.failRead = true
-        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+        val recreated = SettingsViewModel(repository, keyStore, viewModelReplyProvider(), viewModelDiscovery())
 
         assertEquals(ApiKeyStatus.Unreadable, awaitKeyStatus(recreated, ApiKeyStatus.Unreadable))
     }
@@ -254,7 +260,7 @@ class SettingsViewModelTest {
     @Test
     fun `explicit delete failure surfaces error and keeps key`() = runBlocking {
         keyStore.storedKey = "SECRET_A"
-        viewModel = SettingsViewModel(repository, keyStore, viewModelReplyProvider())
+        viewModel = SettingsViewModel(repository, keyStore, viewModelReplyProvider(), viewModelDiscovery())
         awaitKeyStatus(viewModel, ApiKeyStatus.Configured)
         keyStore.failDelete = true
 
@@ -282,6 +288,52 @@ class SettingsViewModelTest {
         return checkNotNull(message)
     }
 
+    @Test
+    fun `model refresh loads discovered models and caches ids`() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"llama-3.3-70b"},{"id":"whisper-large-v3-turbo"}]}"""))
+
+        viewModel.refreshModelList(draftSettings(), "draft-key")
+        val state = awaitModelState()
+
+        assertTrue(state is ModelListState.Loaded)
+        assertEquals(2, (state as ModelListState.Loaded).models.size)
+        assertEquals("/v1/models", server.takeRequest().path)
+        assertEquals(
+            listOf("llama-3.3-70b", "whisper-large-v3-turbo"),
+            repository.modelCacheValue()["Custom"],
+        )
+    }
+
+    @Test
+    fun `failed model refresh keeps cached list and never bricks settings`() = runBlocking {
+        repository.saveModelCache("Custom", listOf("saved-model"))
+        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+
+        viewModel.refreshModelList(draftSettings(), "draft-key")
+        val state = awaitModelState()
+
+        assertTrue(state is ModelListState.Failed)
+        assertEquals(listOf("saved-model"), (state as ModelListState.Failed).cached.map { it.id })
+        assertEquals(listOf("saved-model"), repository.modelCacheValue()["Custom"])
+        assertEquals("gpt-4o-mini", repository.state.value.modelId)
+    }
+
+    private suspend fun awaitModelState(): ModelListState {
+        lateinit var state: ModelListState
+        withTimeout(11_000) {
+            while (true) {
+                val current = viewModel.modelListState.value
+                if (current is ModelListState.Loaded || current is ModelListState.Failed) {
+                    state = current
+                    break
+                } else {
+                    delay(20)
+                }
+            }
+        }
+        return state
+    }
+
     private suspend fun awaitKeyStatus(vm: SettingsViewModel = viewModel, expected: ApiKeyStatus): ApiKeyStatus {
         withTimeout(11_000) {
             while (vm.apiKeyStatus.value != expected) {
@@ -289,6 +341,10 @@ class SettingsViewModelTest {
             }
         }
         return vm.apiKeyStatus.value
+    }
+
+    private fun TrackingSettingsRepository.modelCacheValue(): Map<String, List<String>> = runBlocking {
+        modelCache.first()
     }
 
     private fun viewModelReplyProvider(): ConfigurableReplyProvider {
@@ -305,8 +361,15 @@ class SettingsViewModelTest {
             keyStore,
             OpenAiCompatibleReplyProvider(client, json),
             AnthropicCompatibleReplyProvider(client, json),
+            GeminiReplyProvider(client, json),
             { "System" },
         )
+    }
+
+    private fun viewModelDiscovery(): DefaultLlmModelDiscovery {
+        val json = Json { ignoreUnknownKeys = true }
+        val client = OkHttpClient()
+        return DefaultLlmModelDiscovery(client, json, GeminiReplyProvider(client, json))
     }
 
     private fun draftSettings() = AppSettings(
@@ -328,10 +391,16 @@ private class TrackingSettingsRepository(initial: AppSettings) : SettingsReposit
     val state = MutableStateFlow(initial)
     override val settings: Flow<AppSettings> = state
     var saveCount = 0
+    private val cache = MutableStateFlow(emptyMap<String, List<String>>())
+    override val modelCache: Flow<Map<String, List<String>>> = cache
 
     override suspend fun save(settings: AppSettings) {
         saveCount++
         state.value = settings
+    }
+
+    override suspend fun saveModelCache(providerName: String, modelIds: List<String>) {
+        cache.value = cache.value + (providerName to modelIds)
     }
 
     override suspend fun currentLanguage(): ConversationLanguage = state.value.conversationLanguage

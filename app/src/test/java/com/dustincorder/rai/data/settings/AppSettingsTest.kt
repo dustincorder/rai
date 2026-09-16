@@ -8,6 +8,21 @@ class AppSettingsTest {
     @Test fun `OpenAI preset maps protocol and URL`() = assertPreset(LlmProviderPreset.OpenAI, LlmProtocol.OpenAiCompatible, "https://api.openai.com/v1")
     @Test fun `Groq preset maps protocol and URL`() = assertPreset(LlmProviderPreset.Groq, LlmProtocol.OpenAiCompatible, "https://api.groq.com/openai/v1")
     @Test fun `Anthropic preset maps protocol and URL`() = assertPreset(LlmProviderPreset.Anthropic, LlmProtocol.AnthropicCompatible, "https://api.anthropic.com/v1")
+    @Test fun `Gemini preset uses Gemini protocol and AI Studio endpoint`() =
+        assertPreset(LlmProviderPreset.Gemini, LlmProtocol.Gemini, "https://generativelanguage.googleapis.com/v1beta")
+
+    @Test
+    fun `resolved model id honors custom model selection`() {
+        assertEquals("gpt-4o-mini", AppSettings(provider = LlmProviderPreset.OpenAI).resolvedModelId())
+        assertEquals(
+            "my-model",
+            AppSettings(
+                provider = LlmProviderPreset.OpenAI,
+                useCustomModel = true,
+                customModelId = "my-model",
+            ).resolvedModelId(),
+        )
+    }
 
     @Test
     fun `Groq preset default model uses creator slash id`() {

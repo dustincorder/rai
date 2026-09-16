@@ -73,9 +73,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.dustincorder.rai.R
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.InteractionMode
+import com.dustincorder.rai.domain.RayaErrorCode
+import com.dustincorder.rai.domain.RayaNoticeCode
 import com.dustincorder.rai.presentation.RayaUiState
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.ui.raya.face.RayaFace
@@ -110,9 +114,9 @@ fun RayaScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Райя", fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.assistant_name), fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Голосовой ассистент",
+                            stringResource(R.string.assistant_subtitle),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -123,10 +127,10 @@ fun RayaScreen(
                         onClick = { showClearDialog = true },
                         enabled = canClear,
                     ) {
-                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "Очистить диалог")
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = stringResource(R.string.clear_conversation))
                     }
                     IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "Настройки")
+                        Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.settings))
                     }
                 },
             )
@@ -173,19 +177,19 @@ fun RayaScreen(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("Очистить диалог?") },
-            text = { Text("Текущая история разговора будет удалена.") },
+            title = { Text(stringResource(R.string.clear_conversation_title)) },
+            text = { Text(stringResource(R.string.clear_conversation_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     onClearConversation()
                     showClearDialog = false
                 }) {
-                    Text("Очистить")
+                    Text(stringResource(R.string.clear))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) {
-                    Text("Отмена")
+                    Text(stringResource(R.string.cancel))
                 }
             },
         )
@@ -217,7 +221,7 @@ private fun FaceHeader(
             StatusChip(state)
             if (state.errorMessage != null) {
                 Spacer(Modifier.height(12.dp))
-                ErrorBanner(state.errorMessage)
+                ErrorBanner(state.errorMessage, state.errorCode)
             }
         }
         Box(
@@ -291,12 +295,15 @@ private fun TextComposer(
                 OutlinedTextField(
                     value = draft,
                     onValueChange = onDraftChange,
-                    placeholder = { Text("Написать сообщение…") },
+                    placeholder = { Text(stringResource(R.string.message_placeholder)) },
                     modifier = Modifier.weight(1f),
                     maxLines = 4,
                     enabled = !busy,
                     shape = RoundedCornerShape(24.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Send,
+                    ),
                     keyboardActions = KeyboardActions(onSend = {
                         if (!busy && draft.isNotBlank()) onSubmitText()
                     }),
@@ -306,11 +313,11 @@ private fun TextComposer(
                     enabled = !busy,
                 ) {
                     if (draft.isBlank()) {
-                        Icon(Icons.Outlined.MicNone, contentDescription = "Голосовой чат")
+                        Icon(Icons.Outlined.MicNone, contentDescription = stringResource(R.string.voice_chat))
                     } else {
                         Icon(
                             Icons.AutoMirrored.Outlined.Send,
-                            contentDescription = "Отправить сообщение",
+                            contentDescription = stringResource(R.string.send_message),
                         )
                     }
                 }
@@ -342,30 +349,30 @@ private fun VoiceControls(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Column(Modifier.weight(1f, fill = true)) {
-                    Text("Голосовой чат", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        state.status,
+                    Text(stringResource(R.string.voice_chat), style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            stringResource(state.statusResId),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (state.isSpeaking) {
                     IconButton(onClick = onInterruptSpeech) {
-                        Icon(Icons.Outlined.Stop, contentDescription = "Остановить речь")
+                        Icon(Icons.Outlined.Stop, contentDescription = stringResource(R.string.stop_speech))
                     }
                 }
                 IconButton(onClick = onToggleMicrophone) {
                     Icon(
                         if (state.microphoneEnabled) Icons.Outlined.Mic else Icons.Outlined.MicOff,
                         contentDescription = if (state.microphoneEnabled) {
-                            "Выключить микрофон"
+                            stringResource(R.string.mic_off)
                         } else {
-                            "Включить микрофон"
+                            stringResource(R.string.mic_on)
                         },
                     )
                 }
                 IconButton(onClick = onEndVoiceSession) {
-                    Icon(Icons.Outlined.CallEnd, contentDescription = "Завершить голосовой чат")
+                    Icon(Icons.Outlined.CallEnd, contentDescription = stringResource(R.string.end_voice_chat))
                 }
             }
         }
@@ -373,6 +380,8 @@ private fun VoiceControls(
 }
 
 private data class TransientSpeech(val text: String)
+
+private data class StreamingAssistant(val text: String)
 
 private object ThinkingIndicator
 
@@ -387,11 +396,13 @@ private fun ConversationArea(
     val showTransient = listening && state.userText.isNotBlank() &&
         messages.lastOrNull()?.text != state.userText
     val thinking = state.face.emotion == RayaFaceEmotion.Thinking
+    val showStreaming = thinking && state.streamingText.isNotBlank()
 
     val items: List<Any> = buildList {
         messages.forEach { add(it) }
         if (showTransient) add(TransientSpeech(state.userText))
-        if (thinking) add(ThinkingIndicator)
+        if (showStreaming) add(StreamingAssistant(state.streamingText))
+        if (thinking && !showStreaming) add(ThinkingIndicator)
     }
     var tailPolicy by remember { mutableStateOf(ConversationTailPolicyState()) }
     val currentItemCount = rememberUpdatedState(items.size)
@@ -440,7 +451,7 @@ private fun ConversationArea(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "Начните разговор с Райей.",
+                stringResource(R.string.empty_conversation),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -462,7 +473,7 @@ private fun ConversationArea(
             when (item) {
                 is ConversationMessage -> AppearingBubble {
                     when (item.role) {
-                        ConversationRole.Notice -> NoticeChip(item.text)
+                        ConversationRole.Notice -> NoticeChip(item.text, item.noticeCode)
                         else -> MessageBubble(item)
                     }
                 }
@@ -472,12 +483,21 @@ private fun ConversationArea(
                         transient = true,
                     )
                 }
+                is StreamingAssistant -> AppearingBubble { StreamingBubble(item.text) }
                 ThinkingIndicator -> AppearingBubble {
                     ThinkingBubble()
                 }
             }
         }
     }
+}
+
+@Composable
+private fun StreamingBubble(text: String) {
+    MessageBubble(
+        message = ConversationMessage(ConversationRole.Assistant, text),
+        transient = true,
+    )
 }
 
 @Composable
@@ -533,7 +553,7 @@ private fun ThinkingBubble() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Райя",
+                    stringResource(R.string.assistant_name),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -551,7 +571,7 @@ private fun ThinkingBubble() {
 }
 
 @Composable
-private fun NoticeChip(text: String) {
+private fun NoticeChip(text: String, noticeCode: RayaNoticeCode?) {
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -559,7 +579,11 @@ private fun NoticeChip(text: String) {
             shape = MaterialTheme.shapes.large,
         ) {
             Text(
-                text,
+                if (noticeCode == RayaNoticeCode.InactivityEnded) {
+                    stringResource(R.string.notice_inactivity)
+                } else {
+                    text
+                },
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
             )
@@ -568,7 +592,14 @@ private fun NoticeChip(text: String) {
 }
 
 @Composable
-private fun ErrorBanner(message: String) {
+private fun ErrorBanner(message: String, code: RayaErrorCode?) {
+    val localizedMessage = when (code) {
+        RayaErrorCode.ReplyUnavailable -> stringResource(R.string.error_reply_unavailable)
+        RayaErrorCode.RecognitionStartFailed -> stringResource(R.string.error_recognition_start)
+        RayaErrorCode.RecognitionFailed -> stringResource(R.string.error_recognition)
+        RayaErrorCode.VoicePipelineFailed -> stringResource(R.string.error_voice_pipeline)
+        null -> message
+    }
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -582,7 +613,7 @@ private fun ErrorBanner(message: String) {
         ) {
             Icon(Icons.Outlined.ErrorOutline, contentDescription = null, modifier = Modifier.size(20.dp))
             Text(
-                message,
+                localizedMessage,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f, fill = true),
             )
@@ -607,7 +638,7 @@ private fun MessageBubble(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
         ) {
             Text(
-                if (isUser) "Вы" else "Райя",
+                if (isUser) stringResource(R.string.user_label) else stringResource(R.string.assistant_name),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = if (isUser) {
@@ -659,7 +690,7 @@ private fun StatusChip(state: RayaUiState) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                state.status,
+                stringResource(state.statusResId),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
             )

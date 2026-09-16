@@ -1,0 +1,140 @@
+package com.dustincorder.rai.domain
+
+import kotlin.math.sqrt
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** Audio-only STT seam. Implementations own microphone permissions and platform APIs. */
+interface AudioCapture {
+    suspend fun recordUtterance(
+        endpointDetector: VoiceActivityDetector,
+        sampleRateHz: Int = 16_000,
+        channels: Int = 1,
+        initialPcm16: ByteArray = ByteArray(0),
+    ): AudioUtterance
+}
+
+data class AudioUtterance(
+    val pcm16: ByteArray,
+    val sampleRateHz: Int,
+    val channels: Int,
+    val confirmedSpeechMs: Long = 0L,
+    val voicedRatio: Double = 0.0,
+)
+
+data class TranscriptionResult(
+    val text: String,
+    val languageTag: String?,
+)
+
+interface SpeechFrameClassifier {
+    fun isSpeech(frame: ShortArray): Boolean
+    fun reset() = Unit
+    fun release() = Unit
+}
+
+class BargeInHandoffGate {
+    private val claimed = AtomicBoolean(false)
+    fun claim(handoff: BargeInHandoff): BargeInHandoff? =
+        handoff.takeIf { claimed.compareAndSet(false, true) }
+}
+
+interface SpeechTranscriptionProvider {
+    suspend fun transcribe(
+        audio: AudioUtterance,
+        model: String,
+        languageHint: String? = null,
+    ): TranscriptionResult
+}
+
+enum class EndpointDecision {
+    Continue,
+    SpeechConfirmed,
+    EndUtterance,
+    DropTooShort,
+}
+
+/**
+ * Small deterministic endpoint state machine. Short pauses remain inside an
+ * utterance; trailing silence ends only after configured consecutive frames.
+ */
+class VoiceActivityDetector(
+    private val sampleRateHz: Int = 16_000,
+    private val minimumSpeechMs: Long = 250,
+    private val trailingSilenceMs: Long = 1_400,
+    private val maximumUtteranceMs: Long = 30_000,
+    private val rmsThreshold: Double = 0.003,
+    private val speechConfirmationMs: Long = 200,
+    private val speechClassifier: SpeechFrameClassifier? = null,
+) {
+    private var elapsedMs = 0L
+    private var totalSpeechMs = 0L
+    private var consecutiveSpeechMs = 0L
+    private var silenceMs = 0L
+    private var sawSpeech = false
+    private var confirmedSpeech = false
+    private var voicedFrames = 0L
+    private var totalFrames = 0L
+
+    fun acceptPcm16(frame: ShortArray): EndpointDecision {
+        val frameMs = ((frame.size * 1_000L) / sampleRateHz).coerceAtLeast(1L)
+        elapsedMs += frameMs
+        val rms = rms(frame)
+        totalFrames++
+        var justConfirmed = false
+        // Runtime Android supplies a real offline classifier; energy remains only the
+        // deterministic fallback for platform/tests where no classifier is available.
+        val speechFrame = speechClassifier?.isSpeech(frame) ?: (rms >= rmsThreshold)
+        if (speechFrame && rms >= rmsThreshold) {
+            voicedFrames++
+            sawSpeech = true
+            totalSpeechMs += frameMs
+            consecutiveSpeechMs += frameMs
+            silenceMs = 0L
+            if (consecutiveSpeechMs >= speechConfirmationMs && !confirmedSpeech) {
+                confirmedSpeech = true
+                justConfirmed = true
+            }
+        } else if (sawSpeech) {
+            consecutiveSpeechMs = 0L
+            silenceMs += frameMs
+        }
+        if (elapsedMs >= maximumUtteranceMs) return EndpointDecision.EndUtterance
+        if (sawSpeech && silenceMs >= trailingSilenceMs) {
+            return if (confirmedSpeech && totalSpeechMs >= minimumSpeechMs) {
+                EndpointDecision.EndUtterance
+            } else {
+                EndpointDecision.DropTooShort
+            }
+        }
+        return if (justConfirmed) EndpointDecision.SpeechConfirmed else EndpointDecision.Continue
+    }
+
+    fun reset() {
+        elapsedMs = 0L
+        totalSpeechMs = 0L
+        consecutiveSpeechMs = 0L
+        silenceMs = 0L
+        sawSpeech = false
+        confirmedSpeech = false
+        voicedFrames = 0L
+        totalFrames = 0L
+        speechClassifier?.reset()
+    }
+
+    fun release() {
+        speechClassifier?.release()
+    }
+
+    fun confirmedSpeechMs(): Long = totalSpeechMs.takeIf { confirmedSpeech } ?: 0L
+    fun voicedRatio(): Double = if (totalFrames == 0L) 0.0 else voicedFrames.toDouble() / totalFrames
+
+    private fun rms(frame: ShortArray): Double {
+        if (frame.isEmpty()) return 0.0
+        var sum = 0.0
+        frame.forEach { sample ->
+            val normalized = sample / 32_768.0
+            sum += normalized * normalized
+        }
+        return sqrt(sum / frame.size)
+    }
+}
