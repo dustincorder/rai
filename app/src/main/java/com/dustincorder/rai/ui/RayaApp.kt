@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -59,6 +58,10 @@ import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.data.settings.OnboardingPolicy
+import com.dustincorder.rai.data.settings.InitialDestination
+import com.dustincorder.rai.data.settings.effectiveAppearance
+import com.dustincorder.rai.data.settings.previousOnboardingStep
+import com.dustincorder.rai.data.settings.resolveInitialDestination
 import com.dustincorder.rai.data.settings.SttEngine
 import com.dustincorder.rai.domain.TtsEngine
 import com.dustincorder.rai.presentation.ApiKeyStatus
@@ -94,17 +97,20 @@ fun RayaApp(
     var onboardingAppearance by remember { mutableStateOf<AppearanceMode?>(null) }
 
     LaunchedEffect(Unit) {
-        val completion = application.onboardingStore.completed.first()
-        val legacy = runCatching { application.settingsRepository.hasPersistedSettings() }.getOrDefault(false) ||
-            LlmProviderPreset.entries.any { runCatching { application.apiKeyStore.isConfigured(it) }.getOrDefault(false) }
-        val destination = if (OnboardingPolicy.shouldShow(completion, legacy)) RayaRoute.Onboarding else RayaRoute.Main
+        val destination = when (resolveInitialDestination(application.onboardingStore.completed) {
+            runCatching { application.settingsRepository.hasPersistedSettings() }.getOrDefault(false) ||
+                LlmProviderPreset.entries.any { runCatching { application.apiKeyStore.isConfigured(it) }.getOrDefault(false) }
+        }) {
+            InitialDestination.Onboarding -> RayaRoute.Onboarding
+            InitialDestination.Main -> RayaRoute.Main
+        }
         navController.navigate(destination) {
             popUpTo(RayaRoute.Bootstrap) { inclusive = true }
             launchSingleTop = true
         }
     }
 
-    RayaTheme(appearanceMode = onboardingAppearance ?: settings.appearanceMode) {
+    RayaTheme(appearanceMode = effectiveAppearance(settings.appearanceMode, onboardingAppearance)) {
         NavHost(navController, startDestination = RayaRoute.Bootstrap) {
             composable(RayaRoute.Bootstrap) { BootstrapScreen() }
             composable(RayaRoute.Onboarding) {
@@ -186,13 +192,12 @@ private fun OnboardingScreen(
     LaunchedEffect(step, draft.provider) {
         if (step == 3) onRefreshModels(draft, apiKey)
     }
-    BackHandler(enabled = step > 0 && !saving) { step-- }
+    BackHandler(enabled = step > 0 && !saving) { previousOnboardingStep(step)?.let { step = it } }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(titles[step])) },
-                windowInsets = WindowInsets(0.dp),
             )
         },
         bottomBar = {
@@ -202,7 +207,7 @@ private fun OnboardingScreen(
                     horizontalArrangement = Arrangement.spacedBy(RayaSpacing.Compact),
                 ) {
                     if (step > 0) {
-                        TextButton(onClick = { step-- }, enabled = !saving) {
+                        TextButton(onClick = { previousOnboardingStep(step)?.let { step = it } }, enabled = !saving) {
                             Text(stringResource(R.string.onboarding_back))
                         }
                     } else {
