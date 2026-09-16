@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,6 +23,11 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +42,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
@@ -277,6 +286,7 @@ private fun AiSetup(
     onDraft: (AppSettings) -> Unit,
     onKey: (String) -> Unit,
 ) {
+    var showDraftKey by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         RayaExposedSelector(
             label = stringResource(R.string.provider),
@@ -290,6 +300,16 @@ private fun AiSetup(
                 value = apiKey,
                 onValueChange = onKey,
                 label = { Text(stringResource(R.string.onboarding_api_key)) },
+                visualTransformation = if (showDraftKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                trailingIcon = {
+                    IconButton(onClick = { showDraftKey = !showDraftKey }) {
+                        Icon(
+                            if (showDraftKey) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            contentDescription = stringResource(if (showDraftKey) R.string.hide_key else R.string.show_key),
+                        )
+                    }
+                },
                 supportingText = { if (apiKeyStatusProvider == draft.provider && apiKeyStatus == ApiKeyStatus.Configured) Text(stringResource(R.string.api_key_configured)) },
                 modifier = Modifier.fillMaxWidth(),
             )
