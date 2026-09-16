@@ -67,7 +67,8 @@ class VoiceActivityDetector(
     private val speechClassifier: SpeechFrameClassifier? = null,
 ) {
     private var elapsedMs = 0L
-    private var speechMs = 0L
+    private var totalSpeechMs = 0L
+    private var consecutiveSpeechMs = 0L
     private var silenceMs = 0L
     private var sawSpeech = false
     private var confirmedSpeech = false
@@ -86,18 +87,20 @@ class VoiceActivityDetector(
         if (speechFrame && rms >= rmsThreshold) {
             voicedFrames++
             sawSpeech = true
-            speechMs += frameMs
+            totalSpeechMs += frameMs
+            consecutiveSpeechMs += frameMs
             silenceMs = 0L
-            if (speechMs >= speechConfirmationMs && !confirmedSpeech) {
+            if (consecutiveSpeechMs >= speechConfirmationMs && !confirmedSpeech) {
                 confirmedSpeech = true
                 justConfirmed = true
             }
         } else if (sawSpeech) {
+            consecutiveSpeechMs = 0L
             silenceMs += frameMs
         }
         if (elapsedMs >= maximumUtteranceMs) return EndpointDecision.EndUtterance
         if (sawSpeech && silenceMs >= trailingSilenceMs) {
-            return if (confirmedSpeech && speechMs >= minimumSpeechMs) {
+            return if (confirmedSpeech && totalSpeechMs >= minimumSpeechMs) {
                 EndpointDecision.EndUtterance
             } else {
                 EndpointDecision.DropTooShort
@@ -108,7 +111,8 @@ class VoiceActivityDetector(
 
     fun reset() {
         elapsedMs = 0L
-        speechMs = 0L
+        totalSpeechMs = 0L
+        consecutiveSpeechMs = 0L
         silenceMs = 0L
         sawSpeech = false
         confirmedSpeech = false
@@ -121,7 +125,7 @@ class VoiceActivityDetector(
         speechClassifier?.release()
     }
 
-    fun confirmedSpeechMs(): Long = speechMs.takeIf { confirmedSpeech } ?: 0L
+    fun confirmedSpeechMs(): Long = totalSpeechMs.takeIf { confirmedSpeech } ?: 0L
     fun voicedRatio(): Double = if (totalFrames == 0L) 0.0 else voicedFrames.toDouble() / totalFrames
 
     private fun rms(frame: ShortArray): Double {

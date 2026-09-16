@@ -6,6 +6,42 @@ import org.junit.Test
 
 class VoiceV2Test {
     @Test
+    fun `100ms speech silence 100ms speech does not confirm`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(100) { 4_000 }))
+        detector.acceptPcm16(ShortArray(150))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(100) { 4_000 }))
+    }
+
+    @Test
+    fun `199ms consecutive speech does not confirm`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(199) { 4_000 }))
+    }
+
+    @Test
+    fun `200ms consecutive speech confirms exactly once`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.SpeechConfirmed, detector.acceptPcm16(ShortArray(200) { 4_000 }))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(200) { 4_000 }))
+    }
+
+    @Test
+    fun `post confirmation 500ms pause remains same utterance`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.SpeechConfirmed, detector.acceptPcm16(ShortArray(200) { 4_000 }))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(500)))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(100) { 4_000 }))
+    }
+
+    @Test
+    fun `post confirmation 1400ms silence ends utterance`() {
+        val detector = VoiceActivityDetector(sampleRateHz = 1_000)
+        assertEquals(EndpointDecision.SpeechConfirmed, detector.acceptPcm16(ShortArray(200) { 4_000 }))
+        assertEquals(EndpointDecision.Continue, detector.acceptPcm16(ShortArray(50) { 4_000 }))
+        assertEquals(EndpointDecision.EndUtterance, detector.acceptPcm16(ShortArray(1_400)))
+    }
+    @Test
     fun `short pause does not end utterance after speech`() {
         val detector = VoiceActivityDetector(
             minimumSpeechMs = 100,
