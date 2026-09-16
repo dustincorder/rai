@@ -35,6 +35,8 @@ import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.data.settings.SettingsRepository
+import com.dustincorder.rai.data.llm.ModelListState
+import com.dustincorder.rai.data.llm.chatModels
 import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.RayaViewModel
 import com.dustincorder.rai.presentation.SettingsViewModel
@@ -61,6 +63,7 @@ fun RayaApp(
 ) {
     val navController = rememberNavController()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+    val modelListState by settingsViewModel.modelListState.collectAsStateWithLifecycle()
     val completed by application.onboardingStore.completed.collectAsStateWithLifecycle(initialValue = null)
     val uiState by rayaViewModel.uiState.collectAsStateWithLifecycle()
     val appScope = rememberCoroutineScope()
@@ -92,6 +95,8 @@ fun RayaApp(
                 OnboardingScreen(
                     stored = settings,
                     apiKeyStatus = settingsViewModel.apiKeyStatus.collectAsStateWithLifecycle().value,
+                    modelListState = modelListState,
+                    onRefreshModels = { draft, key -> settingsViewModel.refreshModelList(draft, key) },
                     onFinish = { draft, key ->
                         settingsViewModel.save(draft, key)
                         appScope.launch { application.onboardingStore.markCompleted() }
@@ -130,12 +135,17 @@ fun RayaApp(
 private fun OnboardingScreen(
     stored: AppSettings,
     apiKeyStatus: ApiKeyStatus,
+    modelListState: ModelListState,
+    onRefreshModels: (AppSettings, String) -> Unit,
     onFinish: (AppSettings, String) -> Unit,
 ) {
     val totalSteps = 8
     var step by remember { mutableIntStateOf(0) }
     var draft by remember(stored) { mutableStateOf(stored) }
     var apiKey by remember { mutableStateOf("") }
+    LaunchedEffect(step, draft.provider) {
+        if (step == 4) onRefreshModels(draft, apiKey)
+    }
     val titles = listOf(
         R.string.onboarding_welcome_title,
         R.string.onboarding_appearance_title,
@@ -167,12 +177,28 @@ private fun OnboardingScreen(
                             label = { if (it == AppearanceMode.Raya) stringResource(R.string.appearance_raya) else stringResource(R.string.appearance_dynamic) },
                             onSelect = { draft = draft.copy(appearanceMode = it) },
                         )
-                        2 -> ChoiceRow(
+                        2 -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            ChoiceRow(
                             options = LlmProviderPreset.entries.toList(),
                             selected = draft.provider,
                             label = { it.name },
                             onSelect = { draft = draft.copy(provider = it, modelId = it.defaultModel) },
-                        )
+                            )
+                            if (draft.provider == LlmProviderPreset.Custom) {
+                                ChoiceRow(
+                                    options = LlmProtocol.entries.toList(),
+                                    selected = draft.customProtocol,
+                                    label = { it.name },
+                                    onSelect = { draft = draft.copy(customProtocol = it) },
+                                )
+                                OutlinedTextField(
+                                    value = draft.customBaseUrl,
+                                    onValueChange = { draft = draft.copy(customBaseUrl = it) },
+                                    label = { Text(stringResource(R.string.base_url)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
                         3 -> OutlinedTextField(
                             value = apiKey,
                             onValueChange = { apiKey = it },
@@ -180,12 +206,28 @@ private fun OnboardingScreen(
                             supportingText = { if (apiKeyStatus == ApiKeyStatus.Configured) Text(stringResource(R.string.api_key_configured)) },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        4 -> OutlinedTextField(
-                            value = draft.modelId,
-                            onValueChange = { draft = draft.copy(modelId = it) },
-                            label = { Text(stringResource(R.string.model_id)) },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        4 -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            val discovered = when (val value = modelListState) {
+                                is ModelListState.Loaded -> value.models.chatModels()
+                                is ModelListState.Cached -> value.models.chatModels()
+                                is ModelListState.Failed -> value.cached.chatModels()
+                                ModelListState.Loading -> emptyList()
+                            }
+                            if (discovered.isNotEmpty()) {
+                                ChoiceRow(
+                                    options = discovered,
+                                    selected = discovered.firstOrNull { it.id == draft.modelId } ?: discovered.first(),
+                                    label = { it.displayName },
+                                    onSelect = { draft = draft.copy(modelId = it.id, useCustomModel = false) },
+                                )
+                            }
+                            OutlinedTextField(
+                                value = if (draft.useCustomModel) draft.customModelId else draft.modelId,
+                                onValueChange = { draft = draft.copy(useCustomModel = true, customModelId = it) },
+                                label = { Text(stringResource(R.string.model_id)) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                         5 -> Text(stringResource(R.string.onboarding_system_tts))
                         6 -> Text(stringResource(R.string.onboarding_personality_body))
                         7 -> Text(stringResource(R.string.onboarding_done_body))
