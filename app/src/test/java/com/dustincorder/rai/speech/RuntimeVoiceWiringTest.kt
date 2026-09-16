@@ -50,6 +50,8 @@ class RuntimeVoiceWiringTest {
             model = { "whisper-large-v3-turbo" },
             languageHint = { null },
         )
+        val event = async(Dispatchers.Default) { provider.events.first() }
+        kotlinx.coroutines.delay(50)
 
         provider.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
@@ -58,7 +60,7 @@ class RuntimeVoiceWiringTest {
 
         assertEquals(
             SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"),
-            withTimeout(5_000) { provider.events.first() },
+            withTimeout(5_000) { event.await() },
         )
         assertEquals("whisper-large-v3-turbo", transcription.lastModel)
         assertTrue(capture.called)
@@ -78,6 +80,8 @@ class RuntimeVoiceWiringTest {
             model = { "whisper-large-v3-turbo" },
             languageHint = { null },
         )
+        val event = async(Dispatchers.Default) { provider.events.first() }
+        kotlinx.coroutines.delay(50)
         provider.startListening(
             com.dustincorder.rai.domain.RecognitionRequest(
                 com.dustincorder.rai.domain.ConversationLanguage.Auto,
@@ -86,8 +90,38 @@ class RuntimeVoiceWiringTest {
             com.dustincorder.rai.domain.BargeInHandoff(byteArrayOf(1, 2, 3, 4), 16_000),
         )
 
-        assertEquals(SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"), provider.events.first())
+        assertEquals(SpeechRecognitionEvent.Final("Привет, Райя?", "ru-RU"), event.await())
         assertEquals(byteArrayOf(1, 2, 3, 4).toList(), capture.initialPcm.toList())
+        provider.release()
+        providerScope.cancel()
+    }
+
+    @Test
+    fun `whisper provider event flow has no completed-event replay`() = runBlocking {
+        val capture = RepeatingAudioCapture()
+        val providerScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
+        val provider = WhisperSpeechRecognitionProvider(
+            scope = providerScope,
+            audioCapture = capture,
+            transcription = FakeTranscriptionProvider(),
+            model = { "whisper-large-v3-turbo" },
+            languageHint = { null },
+        )
+        val request = com.dustincorder.rai.domain.RecognitionRequest(
+            com.dustincorder.rai.domain.ConversationLanguage.Auto,
+            "ru-RU",
+        )
+
+        val firstEvent = async(Dispatchers.Default) { provider.events.first() }
+        kotlinx.coroutines.delay(50)
+        provider.startListening(request)
+        assertEquals("Привет, Райя?", withTimeout(2_000) {
+            firstEvent.await()
+        }.let { (it as SpeechRecognitionEvent.Final).text })
+        provider.cancel()
+        provider.startListening(request)
+        assertEquals(null, kotlinx.coroutines.withTimeoutOrNull(200) { provider.events.first() })
+
         provider.release()
         providerScope.cancel()
     }
@@ -105,12 +139,14 @@ class RuntimeVoiceWiringTest {
             groq = groq,
             system = system,
         )
+        val event = async(Dispatchers.Default) { runtime.events.first() }
+        kotlinx.coroutines.delay(50)
         runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "en-US",
         ))
 
-        assertEquals("system", (runtime.events.first() as SpeechRecognitionEvent.Final).text)
+        assertEquals("system", (event.await() as SpeechRecognitionEvent.Final).text)
         assertEquals(1, system.startCount)
         assertEquals(0, groq.startCount)
         runtime.release()
@@ -130,16 +166,38 @@ class RuntimeVoiceWiringTest {
             groq = groq,
             system = system,
         )
+        val event = async(Dispatchers.Default) { runtime.events.first() }
+        kotlinx.coroutines.delay(50)
         runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
             com.dustincorder.rai.domain.ConversationLanguage.Auto,
             "ru-RU",
         ))
 
-        assertEquals("groq", (runtime.events.first() as SpeechRecognitionEvent.Final).text)
+        assertEquals("groq", (event.await() as SpeechRecognitionEvent.Final).text)
         assertEquals(1, groq.startCount)
         assertEquals(0, system.startCount)
         runtime.cancel()
         providerScope.cancel()
+    }
+
+    @Test
+    fun `runtime forwarding does not replay a final into the next recognition turn`() = runBlocking {
+        val settings = FakeSettingsRepository(AppSettings(sttEngine = SttEngine.System))
+        val system = ControlledRecognitionProvider()
+        val runtime = RuntimeSpeechRecognitionProvider(
+            scope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default),
+            settings = settings,
+            keys = FakeApiKeyStore("key"),
+            groq = ControlledRecognitionProvider(),
+            system = system,
+        )
+        system.emit(SpeechRecognitionEvent.Final("old", "ru-RU"))
+        runtime.startListening(com.dustincorder.rai.domain.RecognitionRequest(
+            com.dustincorder.rai.domain.ConversationLanguage.Auto,
+            "ru-RU",
+        ))
+        assertEquals(null, kotlinx.coroutines.withTimeoutOrNull(200) { runtime.events.first() })
+        runtime.release()
     }
 
     @Test
@@ -226,6 +284,20 @@ private class BlockingAudioCapture : AudioCapture {
     }
 }
 
+private class RepeatingAudioCapture : AudioCapture {
+    private var calls = 0
+    override suspend fun recordUtterance(
+        endpointDetector: com.dustincorder.rai.domain.VoiceActivityDetector,
+        sampleRateHz: Int,
+        channels: Int,
+        initialPcm16: ByteArray,
+    ): AudioUtterance {
+        calls++
+        if (calls > 1) kotlinx.coroutines.awaitCancellation()
+        return AudioUtterance(ByteArray(32), sampleRateHz, channels, 250, 0.5)
+    }
+}
+
 private class FakeTranscriptionProvider : SpeechTranscriptionProvider {
     var called = false
     var lastModel: String? = null
@@ -233,6 +305,17 @@ private class FakeTranscriptionProvider : SpeechTranscriptionProvider {
         called = true
         lastModel = model
         return TranscriptionResult("Привет, Райя?", "ru-RU")
+    }
+}
+
+private class ControlledRecognitionProvider : SpeechRecognitionProvider {
+    private val source = MutableSharedFlow<SpeechRecognitionEvent>(extraBufferCapacity = 1)
+    override val events: SharedFlow<SpeechRecognitionEvent> = source.asSharedFlow()
+    override suspend fun startListening(request: com.dustincorder.rai.domain.RecognitionRequest) = Unit
+    override fun cancel() = Unit
+    override fun release() = Unit
+    fun emit(event: SpeechRecognitionEvent) {
+        source.tryEmit(event)
     }
 }
 

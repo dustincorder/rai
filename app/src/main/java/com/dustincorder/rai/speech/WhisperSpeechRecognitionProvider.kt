@@ -33,7 +33,7 @@ class WhisperSpeechRecognitionProvider(
     private val speechClassifier: com.dustincorder.rai.domain.SpeechFrameClassifier? = null,
     private val diagnostics: (String) -> Unit = {},
 ) : SpeechRecognitionProvider, HandoffSpeechRecognitionProvider {
-    private val _events = MutableSharedFlow<SpeechRecognitionEvent>(replay = 1, extraBufferCapacity = 16)
+    private val _events = MutableSharedFlow<SpeechRecognitionEvent>(replay = 0, extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
     private var captureJob: Job? = null
 
@@ -99,7 +99,7 @@ class RuntimeSpeechRecognitionProvider(
     private val system: SpeechRecognitionProvider,
     private val diagnostics: (String) -> Unit = {},
 ) : SpeechRecognitionProvider, HandoffSpeechRecognitionProvider {
-    private val _events = MutableSharedFlow<SpeechRecognitionEvent>(replay = 1, extraBufferCapacity = 16)
+    private val _events = MutableSharedFlow<SpeechRecognitionEvent>(replay = 0, extraBufferCapacity = 16)
     override val events: SharedFlow<SpeechRecognitionEvent> = _events.asSharedFlow()
     private var active: SpeechRecognitionProvider? = null
     private var forwardJob: Job? = null
