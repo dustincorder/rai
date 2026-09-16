@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private object RayaRoute {
+    const val Bootstrap = "bootstrap"
     const val Onboarding = "onboarding"
     const val Main = "main"
     const val Settings = "settings"
@@ -70,17 +71,22 @@ fun RayaApp(
     var legacyInstallation by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(Unit) {
-        val persisted = application.settingsRepository.hasPersistedSettings()
+        val persisted = runCatching { application.settingsRepository.hasPersistedSettings() }.getOrDefault(false)
         val keyConfigured = LlmProviderPreset.entries.any {
-            application.apiKeyStore.isConfigured(it)
+            runCatching { application.apiKeyStore.isConfigured(it) }.getOrDefault(false)
         }
         legacyInstallation = persisted || keyConfigured
     }
 
     LaunchedEffect(completed, legacyInstallation) {
-        if (legacyInstallation != null && !OnboardingPolicy.shouldShow(completed, legacyInstallation == true)) {
-            navController.navigate(RayaRoute.Main) {
-                popUpTo(0) { inclusive = true }
+        if (legacyInstallation != null) {
+            val destination = if (OnboardingPolicy.shouldShow(completed, legacyInstallation == true)) {
+                RayaRoute.Onboarding
+            } else {
+                RayaRoute.Main
+            }
+            navController.navigate(destination) {
+                popUpTo(RayaRoute.Bootstrap) { inclusive = true }
                 launchSingleTop = true
             }
         }
@@ -89,12 +95,14 @@ fun RayaApp(
     RayaTheme(appearanceMode = settings.appearanceMode) {
         NavHost(
             navController = navController,
-            startDestination = RayaRoute.Onboarding,
+            startDestination = RayaRoute.Bootstrap,
         ) {
+            composable(RayaRoute.Bootstrap) { BootstrapScreen() }
             composable(RayaRoute.Onboarding) {
                 OnboardingScreen(
                     stored = settings,
                     apiKeyStatus = settingsViewModel.apiKeyStatus.collectAsStateWithLifecycle().value,
+                    apiKeyStatusProvider = settingsViewModel.apiKeyStatusProvider.collectAsStateWithLifecycle().value,
                     modelListState = modelListState,
                     onRefreshModels = { draft, key -> settingsViewModel.refreshModelList(draft, key) },
                     onProviderChanged = settingsViewModel::refreshApiKeyStatus,
@@ -136,6 +144,7 @@ fun RayaApp(
 private fun OnboardingScreen(
     stored: AppSettings,
     apiKeyStatus: ApiKeyStatus,
+    apiKeyStatusProvider: LlmProviderPreset?,
     modelListState: ModelListState,
     onRefreshModels: (AppSettings, String) -> Unit,
     onProviderChanged: (LlmProviderPreset) -> Unit,
@@ -149,6 +158,7 @@ private fun OnboardingScreen(
     var saving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
     val screenScope = rememberCoroutineScope()
+    val genericSaveError = stringResource(R.string.onboarding_save_failed)
     LaunchedEffect(step, draft.provider) {
         if (step == 4) onRefreshModels(draft, apiKey)
     }
@@ -263,17 +273,25 @@ private fun OnboardingScreen(
                                 saveError = null
                                 val result = onSave(draft, apiKey)
                                 if (result.isSuccess) onComplete()
-                                else saveError = result.exceptionOrNull()?.message ?: "Could not save setup."
+                                else saveError = genericSaveError
                                 saving = false
                             }
                         } else step++
                     },
-                    enabled = !saving && (step != 3 || draft.provider.requiresApiKey.not() || apiKey.isNotBlank() || apiKeyStatus == ApiKeyStatus.Configured),
+                    enabled = !saving && (step != 3 || draft.provider.requiresApiKey.not() || apiKey.isNotBlank() ||
+                        (apiKeyStatusProvider == draft.provider && apiKeyStatus == ApiKeyStatus.Configured)),
                 )
             }
             saveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
+}
+
+@Composable
+private fun BootstrapScreen() {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier.fillMaxSize(),
+    )
 }
 
 @Composable

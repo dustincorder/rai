@@ -4,13 +4,16 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.onboardingDataStore by preferencesDataStore("raya_onboarding")
 
-class OnboardingStore(context: Context) {
-    private val dataStore = context.applicationContext.onboardingDataStore
+class OnboardingStore private constructor(private val dataStore: DataStore<Preferences>) {
+    constructor(context: Context) : this(context.applicationContext.onboardingDataStore)
+    internal constructor(dataStore: DataStore<Preferences>, forTests: Boolean = true) : this(dataStore)
     val completed: Flow<Boolean?> = dataStore.data.map { it[COMPLETED] }
 
     suspend fun markCompleted() {

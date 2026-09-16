@@ -52,6 +52,7 @@ class SettingsViewModel(
     )
     val connectionStatus = MutableStateFlow<ConnectionStatus>(ConnectionStatus.None)
     val apiKeyStatus = MutableStateFlow<ApiKeyStatus>(ApiKeyStatus.Unknown)
+    val apiKeyStatusProvider = MutableStateFlow<LlmProviderPreset?>(null)
     val modelListState = MutableStateFlow<ModelListState>(ModelListState.Cached(emptyList()))
 
     init {
@@ -61,8 +62,11 @@ class SettingsViewModel(
     }
 
     fun refreshApiKeyStatus(provider: LlmProviderPreset) {
+        apiKeyStatusProvider.value = provider
+        apiKeyStatus.value = ApiKeyStatus.Unknown
         viewModelScope.launch {
-            apiKeyStatus.value = keyStatusOf(provider)
+            val status = keyStatusOf(provider)
+            if (apiKeyStatusProvider.value == provider) apiKeyStatus.value = status
         }
     }
 
@@ -83,6 +87,9 @@ class SettingsViewModel(
         if (validated.provider == LlmProviderPreset.Custom) {
             val previous = repository.settings.first()
             if (customContextChanged(previous, validated)) apiKeyStore.delete(LlmProviderPreset.Custom)
+        }
+        if (validated.provider.requiresApiKey && apiKey.isBlank() && !apiKeyStore.isConfigured(validated.provider)) {
+            throw IllegalStateException("API key is required for the selected provider.")
         }
         repository.save(validated)
         if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)

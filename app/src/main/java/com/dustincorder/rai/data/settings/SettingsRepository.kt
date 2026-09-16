@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import com.dustincorder.rai.domain.ConversationLanguage
 import com.dustincorder.rai.domain.ConversationLanguageProvider
 import com.dustincorder.rai.domain.TtsEngine
@@ -31,8 +33,9 @@ interface SettingsRepository : ConversationLanguageProvider {
 
 private val modelCacheJson = Json { ignoreUnknownKeys = true }
 
-class DataStoreSettingsRepository(context: Context) : SettingsRepository {
-    private val dataStore = context.applicationContext.settingsDataStore
+class DataStoreSettingsRepository private constructor(private val dataStore: DataStore<Preferences>) : SettingsRepository {
+    constructor(context: Context) : this(context.applicationContext.settingsDataStore)
+    internal constructor(dataStore: DataStore<Preferences>, forTests: Boolean = true) : this(dataStore)
 
     override val settings: Flow<AppSettings> = dataStore.data.map { preferences ->
         val provider = enumValueOrDefault(preferences[PROVIDER], LlmProviderPreset.OpenAI)

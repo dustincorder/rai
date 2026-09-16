@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
             val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
                 hasMicrophonePermission = granted
                 if (granted) rayaViewModel.startVoiceSession()
+                else rayaViewModel.showError(getString(R.string.microphone_permission_denied))
             }
             RayaApp(
                 application,

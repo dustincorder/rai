@@ -31,6 +31,7 @@ import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -318,6 +319,18 @@ class SettingsViewModelTest {
         assertEquals("gpt-4o-mini", repository.state.value.modelId)
     }
 
+    @Test
+    fun `provider switch invalidates old configured key status`() = runBlocking {
+        keyStore.keys[LlmProviderPreset.OpenAI] = "openai-key"
+        viewModel.refreshApiKeyStatus(LlmProviderPreset.OpenAI)
+        awaitKeyStatus(expected = ApiKeyStatus.Configured)
+
+        viewModel.refreshApiKeyStatus(LlmProviderPreset.Groq)
+        assertNotEquals(ApiKeyStatus.Configured, viewModel.apiKeyStatus.value)
+        awaitKeyStatus(expected = ApiKeyStatus.Missing)
+        assertEquals(LlmProviderPreset.Groq, viewModel.apiKeyStatusProvider.value)
+    }
+
     private suspend fun awaitModelState(): ModelListState {
         lateinit var state: ModelListState
         withTimeout(11_000) {
@@ -407,6 +420,7 @@ private class TrackingSettingsRepository(initial: AppSettings) : SettingsReposit
 }
 
 private class TrackingApiKeyStore : ApiKeyStore {
+    val keys = mutableMapOf<LlmProviderPreset, String>()
     var writeCount = 0
     var writtenKey: String? = null
     var storedKey: String? = null
@@ -416,7 +430,7 @@ private class TrackingApiKeyStore : ApiKeyStore {
 
     override suspend fun read(provider: LlmProviderPreset): String? {
         if (failRead) throw ApiKeyStorageException("Не удалось прочитать сохранённый API key. Замените или удалите его.")
-        return storedKey
+        return keys[provider] ?: storedKey
     }
 
     override suspend fun write(provider: LlmProviderPreset, value: String) {
@@ -424,10 +438,12 @@ private class TrackingApiKeyStore : ApiKeyStore {
         if (failWrite) throw ApiKeyStorageException("Не удалось записать API key.")
         writtenKey = value
         storedKey = value
+        keys[provider] = value
     }
 
     override suspend fun delete(provider: LlmProviderPreset) {
         if (failDelete) throw ApiKeyStorageException("Не удалось удалить API key.")
         storedKey = null
+        keys.remove(provider)
     }
 }

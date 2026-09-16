@@ -50,6 +50,37 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    signingConfigs {
+        create("release") {
+            val privateDir = file(System.getProperty("user.home") + "/.glazegram")
+            val envFile = listOf(
+                file(privateDir.absolutePath + "/.env"),
+                file(privateDir.absolutePath + "/secrets.env"),
+            ).firstOrNull { it.isFile }
+            val values = if (envFile != null) {
+                envFile.readLines()
+                    .mapNotNull { line -> line.substringBefore('#').trim().takeIf { it.contains('=') } }
+                    .associate { line -> line.substringBefore('=').trim() to line.substringAfter('=').trim().trim('"', '\'') }
+            } else {
+                emptyMap()
+            }
+            val storeFilePath = values["RELEASE_KEYSTORE"] ?: values["KEYSTORE_PATH"] ?:
+                file(privateDir.absolutePath + "/release.keystore").takeIf { it.isFile }?.absolutePath
+            if (!storeFilePath.isNullOrBlank() && values["RELEASE_KEY_ALIAS"] != null &&
+                values["RELEASE_STORE_PASSWORD"] != null && values["RELEASE_KEY_PASSWORD"] != null
+            ) {
+                storeFile = file(storeFilePath)
+                keyAlias = values["RELEASE_KEY_ALIAS"]
+                storePassword = values["RELEASE_STORE_PASSWORD"]
+                keyPassword = values["RELEASE_KEY_PASSWORD"]
+            }
+        }
+    }
+
+    buildTypes.getByName("release") {
+        signingConfig = signingConfigs.getByName("release")
+    }
 }
 
 dependencies {
