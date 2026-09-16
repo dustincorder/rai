@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import android.os.Build
 import com.dustincorder.rai.data.settings.AppearanceMode
 
 private val RayaLightColors = lightColorScheme(
@@ -59,7 +60,7 @@ fun RayaTheme(
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
-    val colors = if (appearanceMode == AppearanceMode.Dynamic) {
+    val colors = if (appearanceMode == AppearanceMode.Dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (isSystemInDarkTheme()) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
         RayaDarkColors

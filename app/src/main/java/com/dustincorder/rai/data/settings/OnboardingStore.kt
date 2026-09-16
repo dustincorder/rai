@@ -24,5 +24,9 @@ class OnboardingStore(context: Context) {
 
 object OnboardingPolicy {
     fun shouldShow(completed: Boolean?, legacySettingsExist: Boolean): Boolean =
-        completed != true && !legacySettingsExist
+        when (completed) {
+            true -> false
+            false -> true
+            null -> !legacySettingsExist
+        }
 }

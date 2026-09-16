@@ -35,6 +35,7 @@ import com.dustincorder.rai.data.settings.AppSettings
 import com.dustincorder.rai.data.settings.LlmProtocol
 import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.data.settings.SettingsRepository
+import com.dustincorder.rai.data.settings.OnboardingPolicy
 import com.dustincorder.rai.data.llm.ModelListState
 import com.dustincorder.rai.data.llm.chatModels
 import com.dustincorder.rai.presentation.ApiKeyStatus
@@ -66,7 +67,6 @@ fun RayaApp(
     val modelListState by settingsViewModel.modelListState.collectAsStateWithLifecycle()
     val completed by application.onboardingStore.completed.collectAsStateWithLifecycle(initialValue = null)
     val uiState by rayaViewModel.uiState.collectAsStateWithLifecycle()
-    val appScope = rememberCoroutineScope()
     var legacyInstallation by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(Unit) {
@@ -78,7 +78,7 @@ fun RayaApp(
     }
 
     LaunchedEffect(completed, legacyInstallation) {
-        if (legacyInstallation == true || completed == true) {
+        if (legacyInstallation != null && !OnboardingPolicy.shouldShow(completed, legacyInstallation == true)) {
             navController.navigate(RayaRoute.Main) {
                 popUpTo(0) { inclusive = true }
                 launchSingleTop = true
@@ -97,9 +97,10 @@ fun RayaApp(
                     apiKeyStatus = settingsViewModel.apiKeyStatus.collectAsStateWithLifecycle().value,
                     modelListState = modelListState,
                     onRefreshModels = { draft, key -> settingsViewModel.refreshModelList(draft, key) },
-                    onFinish = { draft, key ->
-                        settingsViewModel.save(draft, key)
-                        appScope.launch { application.onboardingStore.markCompleted() }
+                    onProviderChanged = settingsViewModel::refreshApiKeyStatus,
+                    onSave = { draft, key -> settingsViewModel.saveForOnboarding(draft, key) },
+                    onComplete = {
+                        application.onboardingStore.markCompleted()
                         navController.navigate(RayaRoute.Main) {
                             popUpTo(0) { inclusive = true }
                         }
@@ -137,12 +138,17 @@ private fun OnboardingScreen(
     apiKeyStatus: ApiKeyStatus,
     modelListState: ModelListState,
     onRefreshModels: (AppSettings, String) -> Unit,
-    onFinish: (AppSettings, String) -> Unit,
+    onProviderChanged: (LlmProviderPreset) -> Unit,
+    onSave: suspend (AppSettings, String) -> Result<Unit>,
+    onComplete: suspend () -> Unit,
 ) {
     val totalSteps = 8
     var step by remember { mutableIntStateOf(0) }
     var draft by remember(stored) { mutableStateOf(stored) }
     var apiKey by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val screenScope = rememberCoroutineScope()
     LaunchedEffect(step, draft.provider) {
         if (step == 4) onRefreshModels(draft, apiKey)
     }
@@ -182,7 +188,7 @@ private fun OnboardingScreen(
                             options = LlmProviderPreset.entries.toList(),
                             selected = draft.provider,
                             label = { it.name },
-                            onSelect = { draft = draft.copy(provider = it, modelId = it.defaultModel) },
+                            onSelect = { draft = draft.copy(provider = it, modelId = it.defaultModel); apiKey = ""; onProviderChanged(it) },
                             )
                             if (draft.provider == LlmProviderPreset.Custom) {
                                 ChoiceRow(
@@ -197,6 +203,13 @@ private fun OnboardingScreen(
                                     label = { Text(stringResource(R.string.base_url)) },
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                                if (draft.customBaseUrl.trim().startsWith("http://")) {
+                                    androidx.compose.material3.Switch(
+                                        checked = draft.customAllowInsecureHttp,
+                                        onCheckedChange = { draft = draft.copy(customAllowInsecureHttp = it) },
+                                    )
+                                    Text(stringResource(R.string.unsafe_http_warning), style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                         3 -> OutlinedTextField(
@@ -244,11 +257,21 @@ private fun OnboardingScreen(
                 RayaPrimaryButton(
                     text = stringResource(if (step == totalSteps - 1) R.string.onboarding_finish else R.string.onboarding_continue),
                     onClick = {
-                        if (step == totalSteps - 1) onFinish(draft, apiKey) else step++
+                        if (step == totalSteps - 1) {
+                            screenScope.launch {
+                                saving = true
+                                saveError = null
+                                val result = onSave(draft, apiKey)
+                                if (result.isSuccess) onComplete()
+                                else saveError = result.exceptionOrNull()?.message ?: "Could not save setup."
+                                saving = false
+                            }
+                        } else step++
                     },
-                    enabled = step != 3 || draft.provider.requiresApiKey.not() || apiKey.isNotBlank() || apiKeyStatus == ApiKeyStatus.Configured,
+                    enabled = !saving && (step != 3 || draft.provider.requiresApiKey.not() || apiKey.isNotBlank() || apiKeyStatus == ApiKeyStatus.Configured),
                 )
             }
+            saveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
 }

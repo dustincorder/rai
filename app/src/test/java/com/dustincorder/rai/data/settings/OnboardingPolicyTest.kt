@@ -21,6 +21,10 @@ class OnboardingPolicyTest {
         assertTrue(OnboardingPolicy.shouldShow(completed = false, legacySettingsExist = false))
     }
 
+    @Test fun `explicit false overrides legacy installation`() {
+        assertTrue(OnboardingPolicy.shouldShow(completed = false, legacySettingsExist = true))
+    }
+
     @Test fun `raya appearance is default and persists in settings value`() {
         assertTrue(AppSettings().appearanceMode == AppearanceMode.Raya)
         val selected = AppSettings(appearanceMode = AppearanceMode.Dynamic)

@@ -68,23 +68,24 @@ class SettingsViewModel(
 
     fun save(settings: AppSettings, apiKey: String) {
         viewModelScope.launch {
-            runCatching {
-                val validated = settings.validated()
-                if (validated.provider == LlmProviderPreset.Custom) {
-                    val previous = repository.settings.first()
-                    if (customContextChanged(previous, validated)) {
-                        apiKeyStore.delete(LlmProviderPreset.Custom)
-                    }
-                }
-                repository.save(validated)
-                if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
-            }.onSuccess {
+            saveForOnboarding(settings, apiKey).onSuccess {
                 refreshApiKeyStatus(settings.provider)
                 connectionStatus.value = ConnectionStatus.Message("Настройки сохранены", isError = false)
             }.onFailure {
                 connectionStatus.value = ConnectionStatus.Message(it.message ?: "Не удалось сохранить настройки", isError = true)
             }
         }
+    }
+
+    /** Atomic suspend save used by onboarding before it can mark setup complete. */
+    suspend fun saveForOnboarding(settings: AppSettings, apiKey: String): Result<Unit> = runCatching {
+        val validated = settings.validated()
+        if (validated.provider == LlmProviderPreset.Custom) {
+            val previous = repository.settings.first()
+            if (customContextChanged(previous, validated)) apiKeyStore.delete(LlmProviderPreset.Custom)
+        }
+        repository.save(validated)
+        if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
     }
 
     fun deleteKey(provider: LlmProviderPreset) {
