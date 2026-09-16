@@ -78,6 +78,7 @@ class SettingsViewModelTest {
 
     @After
     fun tearDown() {
+        viewModel.closeForTesting()
         Dispatchers.resetMain()
         server.shutdown()
     }
@@ -329,6 +330,69 @@ class SettingsViewModelTest {
         assertNotEquals(ApiKeyStatus.Configured, viewModel.apiKeyStatus.value)
         awaitKeyStatus(expected = ApiKeyStatus.Missing)
         assertEquals(LlmProviderPreset.Groq, viewModel.apiKeyStatusProvider.value)
+    }
+
+    @Test
+    fun `saveForOnboarding valid required key persists settings and key`() = runBlocking {
+        val settings = AppSettings(provider = LlmProviderPreset.Groq, modelId = "model")
+
+        val result = viewModel.saveForOnboarding(settings, "groq-key")
+
+        assertTrue(result.isSuccess)
+        assertEquals(settings, repository.state.value)
+        assertEquals("groq-key", keyStore.keys[LlmProviderPreset.Groq])
+    }
+
+    @Test
+    fun `saveForOnboarding validation failure does not persist or write key`() = runBlocking {
+        val settings = AppSettings(
+            provider = LlmProviderPreset.Custom,
+            customBaseUrl = "not-a-url",
+            modelId = "model",
+        )
+
+        val result = viewModel.saveForOnboarding(settings, "typed-key")
+
+        assertTrue(result.isFailure)
+        assertEquals(0, repository.saveCount)
+        assertEquals(0, keyStore.writeCount)
+    }
+
+    @Test
+    fun `saveForOnboarding blocks required provider without typed or stored key`() = runBlocking {
+        val result = viewModel.saveForOnboarding(
+            AppSettings(provider = LlmProviderPreset.Groq, modelId = "model"),
+            "",
+        )
+
+        assertTrue(result.isFailure)
+        assertEquals(0, repository.saveCount)
+    }
+
+    @Test
+    fun `saveForOnboarding accepts required provider with stored key`() = runBlocking {
+        keyStore.keys[LlmProviderPreset.Groq] = "stored-key"
+
+        val result = viewModel.saveForOnboarding(
+            AppSettings(provider = LlmProviderPreset.Groq, modelId = "model"),
+            "",
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, repository.saveCount)
+    }
+
+    @Test
+    fun `saveForOnboarding returns failure when secure key write fails`() = runBlocking {
+        keyStore.failWrite = true
+
+        val result = viewModel.saveForOnboarding(
+            AppSettings(provider = LlmProviderPreset.Groq, modelId = "model"),
+            "typed-key",
+        )
+
+        assertTrue(result.isFailure)
+        assertEquals(1, repository.saveCount)
     }
 
     private suspend fun awaitModelState(): ModelListState {

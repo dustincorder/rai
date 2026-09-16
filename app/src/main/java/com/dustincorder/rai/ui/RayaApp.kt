@@ -1,6 +1,7 @@
 package com.dustincorder.rai.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,8 +10,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -157,6 +161,8 @@ private fun OnboardingScreen(
     var apiKey by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
+    var modelMenuExpanded by remember { mutableStateOf(false) }
+    var providerMenuExpanded by remember { mutableStateOf(false) }
     val screenScope = rememberCoroutineScope()
     val genericSaveError = stringResource(R.string.onboarding_save_failed)
     LaunchedEffect(step, draft.provider) {
@@ -194,12 +200,28 @@ private fun OnboardingScreen(
                             onSelect = { draft = draft.copy(appearanceMode = it) },
                         )
                         2 -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            ChoiceRow(
-                            options = LlmProviderPreset.entries.toList(),
-                            selected = draft.provider,
-                            label = { it.name },
-                            onSelect = { draft = draft.copy(provider = it, modelId = it.defaultModel); apiKey = ""; onProviderChanged(it) },
-                            )
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(
+                                    onClick = { providerMenuExpanded = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text(draft.provider.name) }
+                                DropdownMenu(
+                                    expanded = providerMenuExpanded,
+                                    onDismissRequest = { providerMenuExpanded = false },
+                                ) {
+                                    LlmProviderPreset.entries.forEach { provider ->
+                                        DropdownMenuItem(
+                                            text = { Text(provider.name) },
+                                            onClick = {
+                                                draft = draft.copy(provider = provider, modelId = provider.defaultModel)
+                                                apiKey = ""
+                                                providerMenuExpanded = false
+                                                onProviderChanged(provider)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
                             if (draft.provider == LlmProviderPreset.Custom) {
                                 ChoiceRow(
                                     options = LlmProtocol.entries.toList(),
@@ -236,13 +258,37 @@ private fun OnboardingScreen(
                                 is ModelListState.Failed -> value.cached.chatModels()
                                 ModelListState.Loading -> emptyList()
                             }
-                            if (discovered.isNotEmpty()) {
-                                ChoiceRow(
-                                    options = discovered,
-                                    selected = discovered.firstOrNull { it.id == draft.modelId } ?: discovered.first(),
-                                    label = { it.displayName },
-                                    onSelect = { draft = draft.copy(modelId = it.id, useCustomModel = false) },
-                                )
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(
+                                    onClick = { modelMenuExpanded = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(
+                                        discovered.firstOrNull { it.id == draft.modelId }?.displayName
+                                            ?: draft.modelId,
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = modelMenuExpanded,
+                                    onDismissRequest = { modelMenuExpanded = false },
+                                ) {
+                                    discovered.forEach { model ->
+                                        DropdownMenuItem(
+                                            text = { Text(model.displayName) },
+                                            onClick = {
+                                                draft = draft.copy(modelId = model.id, useCustomModel = false)
+                                                modelMenuExpanded = false
+                                            },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.custom_model)) },
+                                        onClick = {
+                                            draft = draft.copy(useCustomModel = true)
+                                            modelMenuExpanded = false
+                                        },
+                                    )
+                                }
                             }
                             OutlinedTextField(
                                 value = if (draft.useCustomModel) draft.customModelId else draft.modelId,

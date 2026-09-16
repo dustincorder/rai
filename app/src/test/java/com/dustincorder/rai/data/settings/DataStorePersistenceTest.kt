@@ -1,6 +1,8 @@
 package com.dustincorder.rai.data.settings
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.assertEquals
@@ -30,7 +32,10 @@ class DataStorePersistenceTest {
     @Test
     fun `missing appearance field remains Raya-compatible default`() = runBlocking {
         val dataStore = newDataStore()
-        DataStoreSettingsRepository(dataStore, true).save(AppSettings())
+        dataStore.edit { preferences ->
+            preferences[stringPreferencesKey("provider")] = LlmProviderPreset.OpenAI.name
+            preferences[stringPreferencesKey("model")] = "legacy-model"
+        }
 
         assertEquals(AppearanceMode.Raya, DataStoreSettingsRepository(dataStore, true).settings.first().appearanceMode)
     }

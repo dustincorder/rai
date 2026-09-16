@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 sealed interface ConnectionStatus {
     data object None : ConnectionStatus
@@ -45,6 +46,9 @@ class SettingsViewModel(
     private val replyProvider: ConfigurableReplyProvider,
     private val modelDiscovery: LlmModelDiscovery,
 ) : ViewModel() {
+    internal fun closeForTesting() {
+        viewModelScope.cancel()
+    }
     val settings: StateFlow<AppSettings> = repository.settings.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
