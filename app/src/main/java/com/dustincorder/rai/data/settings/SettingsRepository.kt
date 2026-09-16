@@ -22,6 +22,7 @@ private val Context.settingsDataStore by preferencesDataStore("raya_settings")
 interface SettingsRepository : ConversationLanguageProvider {
     val settings: Flow<AppSettings>
     suspend fun save(settings: AppSettings)
+    suspend fun hasPersistedSettings(): Boolean = false
 
     /** Last successfully discovered model ids per provider name. */
     val modelCache: Flow<Map<String, List<String>>>
@@ -45,6 +46,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             sttModelId = preferences[STT_MODEL] ?: "whisper-large-v3-turbo",
             sttEngine = enumValueOrDefault(preferences[STT_ENGINE], SttEngine.GroqWhisper),
             ttsEngine = enumValueOrDefault(preferences[TTS_ENGINE], TtsEngine.System),
+            appearanceMode = enumValueOrDefault(preferences[APPEARANCE_MODE], AppearanceMode.Raya),
             conversationLanguage = decodeLanguage(preferences[LANGUAGE] ?: "auto"),
             customAllowInsecureHttp = preferences[ALLOW_INSECURE_HTTP] ?: false,
         )
@@ -90,10 +92,13 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
             it[STT_MODEL] = settings.sttModelId
             it[STT_ENGINE] = settings.sttEngine.name
             it[TTS_ENGINE] = settings.ttsEngine.name
+            it[APPEARANCE_MODE] = settings.appearanceMode.name
             it[LANGUAGE] = encodeLanguage(settings.conversationLanguage)
             it[ALLOW_INSECURE_HTTP] = settings.customAllowInsecureHttp
         }
     }
+
+    override suspend fun hasPersistedSettings(): Boolean = dataStore.data.first().asMap().isNotEmpty()
 
     override suspend fun currentLanguage(): ConversationLanguage = settings.first().conversationLanguage
 
@@ -124,6 +129,7 @@ class DataStoreSettingsRepository(context: Context) : SettingsRepository {
         val STT_MODEL = stringPreferencesKey("stt_model_id")
         val STT_ENGINE = stringPreferencesKey("stt_engine")
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
+        val APPEARANCE_MODE = stringPreferencesKey("appearance_mode")
         val MODEL_CACHE = stringPreferencesKey("model_cache_json")
         val LANGUAGE = stringPreferencesKey("conversation_language")
         val ALLOW_INSECURE_HTTP = booleanPreferencesKey("custom_allow_insecure_http")
