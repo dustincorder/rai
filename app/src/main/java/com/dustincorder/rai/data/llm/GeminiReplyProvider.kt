@@ -94,6 +94,16 @@ class GeminiReplyProvider(
         return text ?: error("Провайдер вернул пустой ответ.")
     }
 
+    suspend fun executePayload(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): String {
+        val url = "${baseUrl.trimEnd('/')}/models/$model:generateContent"
+        return client.postJson(url, payload.toString(), apiKey)
+    }
+
     /** Streams raw SSE content chunks for [ReplyStreaming.toReplyEvents]. */
     fun streamRaw(
         baseUrl: String,

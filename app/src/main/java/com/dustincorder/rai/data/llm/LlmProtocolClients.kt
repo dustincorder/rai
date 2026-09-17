@@ -85,6 +85,18 @@ class OpenAiCompatibleReplyProvider(
             }.getOrNull()
         }.filter { it.isNotEmpty() }
     }
+    suspend fun executePayload(
+        baseUrl: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): String {
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("chat", "completions")))
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .apply { if (!apiKey.isNullOrBlank()) header("Authorization", "Bearer $apiKey") }
+            .build()
+        return client.await(request, json)
+    }
 }
 
 class AnthropicCompatibleReplyProvider(
@@ -117,9 +129,23 @@ class AnthropicCompatibleReplyProvider(
             .firstOrNull { it.type == "text" }?.text?.takeIf { it.isNotBlank() }
             ?: error("Провайдер вернул пустой ответ.")
     }
+
+    suspend fun executePayload(
+        baseUrl: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): String {
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("messages")))
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("anthropic-version", "2023-06-01")
+            .apply { if (!apiKey.isNullOrBlank()) header("x-api-key", apiKey) }
+            .build()
+        return client.await(request, json)
+    }
 }
 
-private val ConversationRole.transport: String
+internal val ConversationRole.transport: String
     get() = when (this) {
         ConversationRole.User -> "user"
         ConversationRole.Assistant -> "assistant"

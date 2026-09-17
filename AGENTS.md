@@ -59,6 +59,7 @@ Avoid as a first action: full-tree `find`, dumping source trees, reading
 | Mic permission | `presentation/MicrophonePermissionPolicy.kt`, `MainActivity.kt` |
 | Tail-follow policy | `ui/ConversationTailPolicy.kt` |
 | Theme / design tokens | `ui/theme/Theme.kt`, `ui/theme/Color.kt`, `ui/designsystem/RayaDesignSystem.kt` |
+| Tools & MCP core | `domain/tools/ToolDefinition.kt`, `domain/tools/ToolTurnRunner.kt`, `domain/tools/ToolRegistry.kt`, `data/llm/tools/OpenAiToolAdapter.kt` |
 | Localization | `app/src/main/res/values/strings.xml`, `app/src/main/res/values-ru/`, `app/src/main/res/values-uk/`, `app/src/main/res/xml/locales_config.xml` |
 | Tests | `app/src/test/java/com/dustincorder/rai/{data,domain,presentation,speech,ui}/` |
 

@@ -39,6 +39,8 @@ class RayaViewModel(
     titleGenerator: ChatTitleGenerator? = null,
     routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
+    toolTurnRunner: com.dustincorder.rai.domain.tools.ToolTurnRunner? = null,
+    toolRegistry: com.dustincorder.rai.domain.tools.ToolRegistry? = null,
 ) : ViewModel() {
     private val orchestrator = RayaOrchestrator(
         scope = viewModelScope,
@@ -48,6 +50,8 @@ class RayaViewModel(
         bargeInMonitor = bargeInMonitor,
         routingDiagnostics = routingDiagnostics,
         voiceDiagnostics = voiceDiagnostics,
+        toolTurnRunner = toolTurnRunner,
+        toolRegistry = toolRegistry,
     )
 
     private val chatCoordinator = chatRepository?.let {
@@ -130,6 +134,10 @@ class RayaViewModel(
 
     fun deleteChat(id: String) = chatCoordinator?.deleteChat(id)
 
+    val pendingToolConfirmation = orchestrator.pendingToolConfirmation
+    fun confirmPendingTool(token: com.dustincorder.rai.domain.tools.ActionConfirmationToken) = orchestrator.confirmPendingTool(token)
+    fun rejectPendingTool() = orchestrator.rejectPendingTool()
+
     override fun onCleared() {
         orchestrator.close()
         super.onCleared()
@@ -149,6 +157,8 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
             voiceDiagnostics = AndroidRayaVoiceDiagnostics(),
+            toolTurnRunner = application.toolTurnRunner,
+            toolRegistry = application.toolRegistry,
         ) as T
     }
 }

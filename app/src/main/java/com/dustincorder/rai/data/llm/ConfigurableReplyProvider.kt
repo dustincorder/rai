@@ -22,6 +22,20 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
+import com.dustincorder.rai.data.llm.tools.AnthropicToolAdapter
+import com.dustincorder.rai.data.llm.tools.GeminiToolAdapter
+import com.dustincorder.rai.data.llm.tools.OpenAiToolAdapter
+import com.dustincorder.rai.domain.tools.ModelRoundResponse
+import com.dustincorder.rai.domain.tools.ModelRoundStep
+import com.dustincorder.rai.domain.tools.ModelTurnInvoker
+import com.dustincorder.rai.domain.tools.ToolDefinition
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+
 class ConfigurableReplyProvider(
     private val settingsRepository: SettingsRepository,
     private val apiKeyStore: ApiKeyStore,
@@ -30,7 +44,7 @@ class ConfigurableReplyProvider(
     private val gemini: GeminiReplyProvider,
     private val systemPrompt: () -> String,
     private val json: Json = Json { ignoreUnknownKeys = true },
-) : ReplyProvider, ChatTitleGenerator {
+) : ReplyProvider, ChatTitleGenerator, ModelTurnInvoker {
     override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse {
         if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
         val settings = settingsRepository.settings.first()
@@ -113,6 +127,176 @@ class ConfigurableReplyProvider(
                 }
             }
             emitAll(raw.toReplyEvents(json))
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            logDiagnostics(failure, config)
+            throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
+        }
+    }
+
+    override suspend fun invokeRound(
+        messages: List<ConversationMessage>,
+        activeTools: List<ToolDefinition>,
+        steps: List<ModelRoundStep>,
+        languageTag: String?,
+    ): ModelRoundResponse {
+        if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
+        val settings = settingsRepository.settings.first()
+        val config = settings.connectionConfig()
+        return try {
+            requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
+            val apiKey = apiKeyStore.read(settings.provider)
+            val modelId = settings.resolvedModelId()
+            if (modelId.isBlank() || settings.baseUrl.isBlank()) {
+                throw LlmConfigurationException("Настрой LLM-провайдера.")
+            }
+            if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
+                throw LlmSafeException("API key не сохранён.")
+            }
+            val prompt = buildString {
+                append(systemPrompt())
+                if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
+            }
+
+            when (settings.protocol) {
+                LlmProtocol.OpenAiCompatible -> {
+                    val adapter = OpenAiToolAdapter(json)
+                    val toolsArray = adapter.formatToolsPayload(activeTools)
+                    val baseMessages = buildList {
+                        add(
+                            buildJsonObject {
+                                put("role", "system")
+                                put("content", prompt)
+                            },
+                        )
+                        messages.forEach { message ->
+                            add(
+                                buildJsonObject {
+                                    put("role", message.role.transport)
+                                    put("content", message.contextText)
+                                },
+                            )
+                        }
+                    }
+                    val stepMessages = adapter.formatStepMessages(steps)
+                    val payload = buildJsonObject {
+                        put("model", modelId)
+                        put(
+                            "messages",
+                            buildJsonArray {
+                                baseMessages.forEach { add(it) }
+                                stepMessages.forEach { add(it) }
+                            },
+                        )
+                        if (toolsArray.isNotEmpty()) {
+                            put("tools", toolsArray)
+                        }
+                    }
+                    val raw = openAi.executePayload(settings.baseUrl, apiKey, payload)
+                    val parsed = json.parseToJsonElement(raw).jsonObject
+                    val messageObj = parsed["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("message")?.jsonObject ?: buildJsonObject {}
+                    val toolCalls = adapter.parseToolCalls(messageObj)
+                    if (toolCalls.isNotEmpty()) {
+                        ModelRoundResponse.ToolCalls(toolCalls)
+                    } else {
+                        val content = messageObj["content"]?.jsonPrimitive?.content ?: ""
+                        ModelRoundResponse.FinalReply(parseRayaResponse(content, json))
+                    }
+                }
+
+                LlmProtocol.AnthropicCompatible -> {
+                    val adapter = AnthropicToolAdapter(json)
+                    val toolsArray = adapter.formatToolsPayload(activeTools)
+                    val baseMessages = messages.map { message ->
+                        buildJsonObject {
+                            put("role", message.role.transport)
+                            put("content", message.contextText)
+                        }
+                    }
+                    val stepMessages = adapter.formatStepMessages(steps)
+                    val payload = buildJsonObject {
+                        put("model", modelId)
+                        put("max_tokens", 4096)
+                        put("system", prompt)
+                        put(
+                            "messages",
+                            buildJsonArray {
+                                baseMessages.forEach { add(it) }
+                                stepMessages.forEach { add(it) }
+                            },
+                        )
+                        if (toolsArray.isNotEmpty()) {
+                            put("tools", toolsArray)
+                        }
+                    }
+                    val raw = anthropic.executePayload(settings.baseUrl, apiKey, payload)
+                    val parsed = json.parseToJsonElement(raw).jsonObject
+                    val contentArray = parsed["content"]?.jsonArray ?: buildJsonArray {}
+                    val toolCalls = adapter.parseToolCalls(contentArray)
+                    if (toolCalls.isNotEmpty()) {
+                        ModelRoundResponse.ToolCalls(toolCalls)
+                    } else {
+                        val text = contentArray.mapNotNull { it.jsonObject }
+                            .firstOrNull { it["type"]?.jsonPrimitive?.content == "text" }
+                            ?.get("text")?.jsonPrimitive?.content ?: ""
+                        ModelRoundResponse.FinalReply(parseRayaResponse(text, json))
+                    }
+                }
+
+                LlmProtocol.Gemini -> {
+                    val adapter = GeminiToolAdapter(json)
+                    val toolsArray = adapter.formatToolsPayload(activeTools)
+                    val baseContents = messages.map { message ->
+                        buildJsonObject {
+                            put("role", if (message.role == ConversationRole.Assistant) "model" else "user")
+                            put(
+                                "parts",
+                                buildJsonArray {
+                                    add(buildJsonObject { put("text", message.contextText) })
+                                },
+                            )
+                        }
+                    }
+                    val stepContents = adapter.formatStepContents(steps)
+                    val payload = buildJsonObject {
+                        put(
+                            "system_instruction",
+                            buildJsonObject {
+                                put(
+                                    "parts",
+                                    buildJsonArray {
+                                        add(buildJsonObject { put("text", prompt) })
+                                    },
+                                )
+                            },
+                        )
+                        put(
+                            "contents",
+                            buildJsonArray {
+                                baseContents.forEach { add(it) }
+                                stepContents.forEach { add(it) }
+                            },
+                        )
+                        if (toolsArray.isNotEmpty()) {
+                            put("tools", toolsArray)
+                        }
+                    }
+                    val raw = gemini.executePayload(settings.baseUrl, modelId, apiKey, payload)
+                    val parsed = json.parseToJsonElement(raw).jsonObject
+                    val candidatesArray = parsed["candidates"]?.jsonArray ?: buildJsonArray {}
+                    val toolCalls = adapter.parseToolCalls(candidatesArray)
+                    if (toolCalls.isNotEmpty()) {
+                        ModelRoundResponse.ToolCalls(toolCalls)
+                    } else {
+                        val firstCandidate = candidatesArray.firstOrNull()?.jsonObject
+                        val parts = firstCandidate?.get("content")?.jsonObject?.get("parts")?.jsonArray
+                        val text = parts?.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.content }?.joinToString("") ?: ""
+                        ModelRoundResponse.FinalReply(parseRayaResponse(text, json))
+                    }
+                }
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {

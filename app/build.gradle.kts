@@ -102,6 +102,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("dev.harrel:json-schema:1.9.1")
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
