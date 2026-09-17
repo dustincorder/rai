@@ -277,6 +277,7 @@ class ChatSessionCoordinatorTest {
         advanceUntilIdle()
         owner.set(eligibleMessages())
         advanceUntilIdle()
+        val before = repository.listSessions().single().updatedAt
         generator.release()
         advanceUntilIdle()
 
@@ -284,6 +285,7 @@ class ChatSessionCoordinatorTest {
         assertTrue(session.title!!.startsWith("Please help me plan"))
         assertTrue(session.title!!.length <= 60)
         assertEquals(ChatTitleSource.Derived, session.titleSource)
+        assertEquals(before, session.updatedAt)
     }
 
     @Test
@@ -333,12 +335,14 @@ class ChatSessionCoordinatorTest {
         advanceUntilIdle()
         owner.set(eligibleMessages())
         advanceUntilIdle()
-        owner.set(eligibleMessages() + user("Changed after title request"))
+        owner.set(listOf(user("Current conversation starts here"), ConversationMessage(ConversationRole.Assistant, "Current answer")))
         advanceUntilIdle()
         generator.release()
         advanceUntilIdle()
 
-        assertNull(repository.listSessions().single().title)
+        val session = repository.listSessions().single()
+        assertEquals("Current conversation starts here", session.title)
+        assertEquals(ChatTitleSource.Derived, session.titleSource)
     }
 
     @Test

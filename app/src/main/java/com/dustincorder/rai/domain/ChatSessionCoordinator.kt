@@ -126,17 +126,13 @@ class ChatSessionCoordinator(
                 runCatching { generator.generate(snapshot) }.getOrNull()
             }
             val generatedTitle = sanitizeChatTitle(generated)
-            val fallbackTitle = deriveChatTitle(snapshot)
-            val title = generatedTitle ?: fallbackTitle ?: return@launch
-            val source = if (generatedTitle != null) ChatTitleSource.Generated else ChatTitleSource.Derived
             mutationMutex.withLock {
                 val currentMessages = repository.loadSession(id)?.messages
-                val canApply = if (generatedTitle != null) {
-                    currentMessages == snapshot
-                } else {
-                    currentMessages?.any { it.role == ConversationRole.User && it.contextText.isNotBlank() } == true
-                }
-                if (canApply) {
+                val currentTitle = deriveChatTitle(currentMessages.orEmpty())
+                val isCurrentGeneratedResult = generatedTitle != null && currentMessages == snapshot
+                val title = if (isCurrentGeneratedResult) generatedTitle else currentTitle
+                if (title != null) {
+                    val source = if (isCurrentGeneratedResult) ChatTitleSource.Generated else ChatTitleSource.Derived
                     repository.updateTitle(id, title, source)
                     _sessions.value = repository.listSessions()
                 }
