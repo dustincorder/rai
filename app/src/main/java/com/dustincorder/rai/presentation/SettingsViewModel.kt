@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 sealed interface ConnectionStatus {
     data object None : ConnectionStatus
@@ -45,6 +46,9 @@ class SettingsViewModel(
     private val replyProvider: ConfigurableReplyProvider,
     private val modelDiscovery: LlmModelDiscovery,
 ) : ViewModel() {
+    internal fun closeForTesting() {
+        viewModelScope.cancel()
+    }
     val settings: StateFlow<AppSettings> = repository.settings.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -52,6 +56,7 @@ class SettingsViewModel(
     )
     val connectionStatus = MutableStateFlow<ConnectionStatus>(ConnectionStatus.None)
     val apiKeyStatus = MutableStateFlow<ApiKeyStatus>(ApiKeyStatus.Unknown)
+    val apiKeyStatusProvider = MutableStateFlow<LlmProviderPreset?>(null)
     val modelListState = MutableStateFlow<ModelListState>(ModelListState.Cached(emptyList()))
 
     init {
@@ -61,30 +66,37 @@ class SettingsViewModel(
     }
 
     fun refreshApiKeyStatus(provider: LlmProviderPreset) {
+        apiKeyStatusProvider.value = provider
+        apiKeyStatus.value = ApiKeyStatus.Unknown
         viewModelScope.launch {
-            apiKeyStatus.value = keyStatusOf(provider)
+            val status = keyStatusOf(provider)
+            if (apiKeyStatusProvider.value == provider) apiKeyStatus.value = status
         }
     }
 
     fun save(settings: AppSettings, apiKey: String) {
         viewModelScope.launch {
-            runCatching {
-                val validated = settings.validated()
-                if (validated.provider == LlmProviderPreset.Custom) {
-                    val previous = repository.settings.first()
-                    if (customContextChanged(previous, validated)) {
-                        apiKeyStore.delete(LlmProviderPreset.Custom)
-                    }
-                }
-                repository.save(validated)
-                if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
-            }.onSuccess {
+            saveForOnboarding(settings, apiKey).onSuccess {
                 refreshApiKeyStatus(settings.provider)
                 connectionStatus.value = ConnectionStatus.Message("Настройки сохранены", isError = false)
             }.onFailure {
                 connectionStatus.value = ConnectionStatus.Message(it.message ?: "Не удалось сохранить настройки", isError = true)
             }
         }
+    }
+
+    /** Atomic suspend save used by onboarding before it can mark setup complete. */
+    suspend fun saveForOnboarding(settings: AppSettings, apiKey: String): Result<Unit> = runCatching {
+        val validated = settings.validated()
+        if (validated.provider == LlmProviderPreset.Custom) {
+            val previous = repository.settings.first()
+            if (customContextChanged(previous, validated)) apiKeyStore.delete(LlmProviderPreset.Custom)
+        }
+        if (validated.provider.requiresApiKey && apiKey.isBlank() && !apiKeyStore.isConfigured(validated.provider)) {
+            throw IllegalStateException("API key is required for the selected provider.")
+        }
+        repository.save(validated)
+        if (apiKey.isNotBlank()) apiKeyStore.write(validated.provider, apiKey)
     }
 
     fun deleteKey(provider: LlmProviderPreset) {

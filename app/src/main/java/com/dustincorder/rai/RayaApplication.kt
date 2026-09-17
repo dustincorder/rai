@@ -9,6 +9,7 @@ import com.dustincorder.rai.data.llm.OpenAiCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.rayaSystemPrompt
 import com.dustincorder.rai.data.secrets.AndroidApiKeyStore
 import com.dustincorder.rai.data.settings.DataStoreSettingsRepository
+import com.dustincorder.rai.data.settings.OnboardingStore
 import com.dustincorder.rai.data.stt.GroqWhisperTranscriptionProvider
 import com.dustincorder.rai.speech.AndroidAudioCapture
 import com.dustincorder.rai.speech.AndroidBargeInMonitor
@@ -31,6 +32,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 class RayaApplication : Application() {
+    val onboardingStore by lazy { OnboardingStore(this) }
     val bargeInMonitor by lazy { AndroidBargeInMonitor(this, ::debugVoice) }
     val settingsRepository by lazy { DataStoreSettingsRepository(this) }
     val apiKeyStore by lazy { AndroidApiKeyStore(this) }

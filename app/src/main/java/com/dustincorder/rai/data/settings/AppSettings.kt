@@ -12,6 +12,11 @@ enum class SttEngine {
     System,
 }
 
+enum class AppearanceMode {
+    Raya,
+    Dynamic,
+}
+
 enum class LlmProviderPreset(
     val protocol: LlmProtocol,
     val baseUrl: String,
@@ -35,6 +40,7 @@ data class AppSettings(
     val sttModelId: String = "whisper-large-v3-turbo",
     val sttEngine: SttEngine = SttEngine.GroqWhisper,
     val ttsEngine: TtsEngine = TtsEngine.System,
+    val appearanceMode: AppearanceMode = AppearanceMode.Raya,
     val conversationLanguage: ConversationLanguage = ConversationLanguage.Auto,
     val customAllowInsecureHttp: Boolean = false,
 ) {

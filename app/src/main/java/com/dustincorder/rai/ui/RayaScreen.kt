@@ -701,7 +701,7 @@ private fun StatusChip(state: RayaUiState) {
 @Preview(name = "Raya screen light", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_NO)
 @Composable
 private fun RayaScreenLightPreview() {
-    RayaTheme(darkTheme = false) {
+    RayaTheme {
         RayaScreen(
             state = RayaUiState(),
             onSubmitText = {},
@@ -718,7 +718,7 @@ private fun RayaScreenLightPreview() {
 @Preview(name = "Raya screen dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 private fun RayaScreenDarkPreview() {
-    RayaTheme(darkTheme = true) {
+    RayaTheme {
         RayaScreen(
             state = RayaUiState(),
             onSubmitText = {},

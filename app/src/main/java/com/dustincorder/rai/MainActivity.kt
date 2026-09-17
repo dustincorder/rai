@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -12,18 +11,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dustincorder.rai.presentation.RayaViewModel
 import com.dustincorder.rai.presentation.RayaViewModelFactory
 import com.dustincorder.rai.presentation.SettingsViewModel
 import com.dustincorder.rai.presentation.SettingsViewModelFactory
-import com.dustincorder.rai.ui.RayaScreen
-import com.dustincorder.rai.ui.SettingsScreen
-import com.dustincorder.rai.ui.theme.RayaTheme
+import com.dustincorder.rai.ui.RayaApp
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,47 +29,26 @@ class MainActivity : ComponentActivity() {
             val application = application as RayaApplication
             val rayaViewModel: RayaViewModel = viewModel(factory = RayaViewModelFactory(application))
             val settingsViewModel: SettingsViewModel = viewModel(factory = SettingsViewModelFactory(application))
-            val uiState by rayaViewModel.uiState.collectAsStateWithLifecycle()
-            var showSettings by rememberSaveable { mutableStateOf(false) }
             var hasMicrophonePermission by remember {
                 mutableStateOf(
                     ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) ==
                         PackageManager.PERMISSION_GRANTED,
                 )
             }
-            val permissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) { granted ->
+            val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
                 hasMicrophonePermission = granted
                 if (granted) rayaViewModel.startVoiceSession()
-                else rayaViewModel.showError(getString(com.dustincorder.rai.R.string.microphone_permission_denied))
+                else rayaViewModel.showError(getString(R.string.microphone_permission_denied))
             }
-
-            BackHandler(enabled = showSettings) { showSettings = false }
-            RayaTheme {
-                if (showSettings) {
-                    SettingsScreen(settingsViewModel, onBack = { showSettings = false })
-                } else {
-                    RayaScreen(
-                        state = uiState,
-                        onSubmitText = { text -> rayaViewModel.submitText(text) },
-                        onVoiceChatClick = {
-                            if (!uiState.voiceSessionActive) {
-                                if (hasMicrophonePermission) rayaViewModel.startVoiceSession()
-                                else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
-                        onEndVoiceSession = { rayaViewModel.endVoiceSession() },
-                        onToggleMicrophone = { rayaViewModel.toggleMicrophone() },
-                        onInterruptSpeech = { rayaViewModel.interruptSpeech() },
-                        onSettingsClick = {
-                            if (uiState.voiceSessionActive) rayaViewModel.endVoiceSession()
-                            showSettings = true
-                        },
-                        onClearConversation = { rayaViewModel.clearConversation() },
-                    )
-                }
-            }
+            RayaApp(
+                application,
+                rayaViewModel,
+                settingsViewModel,
+                onVoiceChatClick = {
+                    if (hasMicrophonePermission) rayaViewModel.startVoiceSession()
+                    else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                },
+            )
         }
     }
 }

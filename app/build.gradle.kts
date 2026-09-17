@@ -50,6 +50,37 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    signingConfigs {
+        create("release") {
+            val privateDir = file(System.getProperty("user.home") + "/.glazegram")
+            val envFile = listOf(
+                file(privateDir.absolutePath + "/.env"),
+                file(privateDir.absolutePath + "/secrets.env"),
+            ).firstOrNull { it.isFile }
+            val values = if (envFile != null) {
+                envFile.readLines()
+                    .mapNotNull { line -> line.substringBefore('#').trim().takeIf { it.contains('=') } }
+                    .associate { line -> line.substringBefore('=').trim() to line.substringAfter('=').trim().trim('"', '\'') }
+            } else {
+                emptyMap()
+            }
+            val storeFilePath = values["RELEASE_KEYSTORE"] ?: values["KEYSTORE_PATH"] ?:
+                file(privateDir.absolutePath + "/release.keystore").takeIf { it.isFile }?.absolutePath
+            if (!storeFilePath.isNullOrBlank() && values["RELEASE_KEY_ALIAS"] != null &&
+                values["RELEASE_STORE_PASSWORD"] != null && values["RELEASE_KEY_PASSWORD"] != null
+            ) {
+                storeFile = file(storeFilePath)
+                keyAlias = values["RELEASE_KEY_ALIAS"]
+                storePassword = values["RELEASE_STORE_PASSWORD"]
+                keyPassword = values["RELEASE_KEY_PASSWORD"]
+            }
+        }
+    }
+
+    buildTypes.getByName("release") {
+        signingConfig = signingConfigs.getByName("release")
+    }
 }
 
 dependencies {
@@ -60,6 +91,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.navigation:navigation-compose:2.8.5")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
