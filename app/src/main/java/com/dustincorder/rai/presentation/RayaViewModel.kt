@@ -11,6 +11,7 @@ import com.dustincorder.rai.domain.ChatSessionCoordinator
 import com.dustincorder.rai.domain.ChatSessionRepository
 import com.dustincorder.rai.domain.ChatTitleGenerator
 import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.ActiveConversation
 import com.dustincorder.rai.domain.BargeInMonitor
 import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaEmotion
@@ -26,6 +27,7 @@ import com.dustincorder.rai.speech.AndroidSpeechSynthesisProvider
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 class RayaViewModel(
@@ -53,8 +55,11 @@ class RayaViewModel(
     }
     val chatSessions: StateFlow<List<ChatSession>> = chatCoordinator?.sessions
         ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())
-    val activeChatId: StateFlow<String?> = chatCoordinator?.activeId
-        ?: kotlinx.coroutines.flow.MutableStateFlow(null)
+    val activeConversation: StateFlow<ActiveConversation> = chatCoordinator?.activeConversation
+        ?: kotlinx.coroutines.flow.MutableStateFlow(ActiveConversation.NewDraft)
+    val activeChatId: StateFlow<String?> = activeConversation.map { active ->
+        (active as? ActiveConversation.Persistent)?.sessionId
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init { chatCoordinator?.start() }
 

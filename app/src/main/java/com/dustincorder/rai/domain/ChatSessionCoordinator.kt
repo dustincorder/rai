@@ -18,8 +18,8 @@ class ChatSessionCoordinator(
 ) {
     private val _sessions = MutableStateFlow<List<ChatSession>>(emptyList())
     val sessions: StateFlow<List<ChatSession>> = _sessions
-    private val _activeId = MutableStateFlow<String?>(null)
-    val activeId: StateFlow<String?> = _activeId
+    private val _activeConversation = MutableStateFlow<ActiveConversation>(ActiveConversation.NewDraft)
+    val activeConversation: StateFlow<ActiveConversation> = _activeConversation
     private val mutationMutex = Mutex()
     private val ready = CompletableDeferred<Unit>()
     private var started = false
@@ -30,11 +30,12 @@ class ChatSessionCoordinator(
         scope.launch {
             val existing = repository.listSessions()
             _sessions.value = existing
-            val active = existing.firstOrNull() ?: repository.createSession().also {
-                _sessions.value = repository.listSessions()
+            val active = existing.firstOrNull()?.let { ActiveConversation.Persistent(it.id) }
+                ?: ActiveConversation.NewDraft
+            _activeConversation.value = active
+            if (active is ActiveConversation.Persistent) {
+                conversationOwner.replaceConversation(repository.loadSession(active.sessionId)?.messages.orEmpty())
             }
-            _activeId.value = active.id
-            conversationOwner.replaceConversation(repository.loadSession(active.id)?.messages.orEmpty())
             scope.launch(start = CoroutineStart.UNDISPATCHED) { observeConversation() }
             ready.complete(Unit)
         }
@@ -42,13 +43,11 @@ class ChatSessionCoordinator(
 
     fun createNewChat() = launchReady {
         if (!conversationOwner.canReplaceConversation()) return@launchReady
-        val session = repository.createSession()
-        if (!conversationOwner.replaceConversation(emptyList())) {
-            repository.deleteSession(session.id)
+        if (_activeConversation.value is ActiveConversation.NewDraft && conversationOwner.conversation.value.isEmpty()) {
             return@launchReady
         }
-        _activeId.value = session.id
-        _sessions.value = repository.listSessions()
+        if (!conversationOwner.replaceConversation(emptyList())) return@launchReady
+        _activeConversation.value = ActiveConversation.NewDraft
     }
 
     fun openChat(id: String) = launchReady {
@@ -56,20 +55,26 @@ class ChatSessionCoordinator(
         if (repository.listSessions().none { it.id == id }) return@launchReady
         val messages = repository.loadSession(id)?.messages.orEmpty()
         if (!conversationOwner.replaceConversation(messages)) return@launchReady
-        _activeId.value = id
+        _activeConversation.value = ActiveConversation.Persistent(id)
         _sessions.value = repository.listSessions()
     }
 
     fun deleteChat(id: String) = launchReady {
         if (!conversationOwner.canReplaceConversation()) return@launchReady
+        if (repository.listSessions().none { it.id == id }) return@launchReady
         repository.deleteSession(id)
         var sessions = repository.listSessions()
-        if (_activeId.value == id) {
-            val next = sessions.firstOrNull() ?: repository.createSession()
+        if ((_activeConversation.value as? ActiveConversation.Persistent)?.sessionId == id) {
+            val next = sessions.firstOrNull()
+            if (next == null) {
+                if (!conversationOwner.replaceConversation(emptyList())) return@launchReady
+                _activeConversation.value = ActiveConversation.NewDraft
+            } else {
+                val messages = repository.loadSession(next.id)?.messages.orEmpty()
+                if (!conversationOwner.replaceConversation(messages)) return@launchReady
+                _activeConversation.value = ActiveConversation.Persistent(next.id)
+            }
             sessions = repository.listSessions()
-            val messages = repository.loadSession(next.id)?.messages.orEmpty()
-            if (!conversationOwner.replaceConversation(messages)) return@launchReady
-            _activeId.value = next.id
         }
         _sessions.value = sessions
     }
@@ -88,27 +93,52 @@ class ChatSessionCoordinator(
             initialEmission = false
             var titleRequest: Pair<String, List<ConversationMessage>>? = null
             mutationMutex.withLock {
-                val id = _activeId.value ?: return@withLock
-                if (!isInitialEmission) repository.saveMessages(id, messages)
+                val sessionId = when (val active = _activeConversation.value) {
+                    ActiveConversation.NewDraft -> {
+                        if (messages.none { it.role == ConversationRole.User && it.contextText.isNotBlank() }) {
+                            return@withLock
+                        }
+                        val session = repository.createSession()
+                        repository.saveMessages(session.id, messages)
+                        _activeConversation.value = ActiveConversation.Persistent(session.id)
+                        session.id
+                    }
+                    is ActiveConversation.Persistent -> {
+                        if (!isInitialEmission) repository.saveMessages(active.sessionId, messages)
+                        active.sessionId
+                    }
+                }
                 _sessions.value = repository.listSessions()
-                val session = _sessions.value.firstOrNull { it.id == id }
-                if (titleGenerator != null && session != null && shouldGenerateChatTitle(session, messages)) {
-                    repository.markTitleGenerationAttempted(id)
+                val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return@withLock
+                if (shouldGenerateChatTitle(session, messages)) {
+                    repository.markTitleGenerationAttempted(sessionId)
                     _sessions.value = repository.listSessions()
-                    titleRequest = id to messages
+                    titleRequest = sessionId to messages
                 }
             }
-            titleRequest?.let { (id, snapshot) ->
-                val generator = titleGenerator ?: return@let
-                scope.launch {
-                    runCatching { generator.generate(snapshot) }.getOrNull()?.let { title ->
-                        mutationMutex.withLock {
-                            if (repository.loadSession(id)?.messages == snapshot) {
-                                repository.updateTitle(id, title, ChatTitleSource.Generated)
-                                _sessions.value = repository.listSessions()
-                            }
-                        }
-                    }
+            titleRequest?.let { (id, snapshot) -> launchTitleAttempt(id, snapshot) }
+        }
+    }
+
+    private fun launchTitleAttempt(id: String, snapshot: List<ConversationMessage>) {
+        scope.launch {
+            val generated = titleGenerator?.let { generator ->
+                runCatching { generator.generate(snapshot) }.getOrNull()
+            }
+            val generatedTitle = sanitizeChatTitle(generated)
+            val fallbackTitle = deriveChatTitle(snapshot)
+            val title = generatedTitle ?: fallbackTitle ?: return@launch
+            val source = if (generatedTitle != null) ChatTitleSource.Generated else ChatTitleSource.Derived
+            mutationMutex.withLock {
+                val currentMessages = repository.loadSession(id)?.messages
+                val canApply = if (generatedTitle != null) {
+                    currentMessages == snapshot
+                } else {
+                    currentMessages?.any { it.role == ConversationRole.User && it.contextText.isNotBlank() } == true
+                }
+                if (canApply) {
+                    repository.updateTitle(id, title, source)
+                    _sessions.value = repository.listSessions()
                 }
             }
         }

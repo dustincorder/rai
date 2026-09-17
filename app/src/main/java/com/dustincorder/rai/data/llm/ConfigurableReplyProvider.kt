@@ -10,6 +10,7 @@ import com.dustincorder.rai.data.settings.normalizeBaseUrl
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.ChatTitleGenerator
+import com.dustincorder.rai.domain.sanitizeChatTitle
 import com.dustincorder.rai.domain.RayaResponse
 import com.dustincorder.rai.domain.ReplyEvent
 import com.dustincorder.rai.domain.ReplyProvider
@@ -77,7 +78,7 @@ class ConfigurableReplyProvider(
             LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, modelId, apiKey, prompt, messages.take(6))
             LlmProtocol.Gemini -> gemini.reply(settings.baseUrl, modelId, apiKey, prompt, messages.take(6))
         }
-        return raw.replace(Regex("\\s+"), " ").trim().trim('"', '\'').take(60).takeIf { it.isNotBlank() }
+        return sanitizeChatTitle(raw)
     }
 
     override fun streamReply(

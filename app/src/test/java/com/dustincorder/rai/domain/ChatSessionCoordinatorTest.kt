@@ -12,7 +12,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -38,8 +37,88 @@ class ChatSessionCoordinatorTest {
         coordinator.start()
         advanceUntilIdle()
 
-        assertEquals(1, coordinator.sessions.value.size)
-        assertNotNull(coordinator.activeId.value)
+        assertTrue(coordinator.sessions.value.isEmpty())
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+        assertTrue(owner.conversation.value.isEmpty())
+    }
+
+    @Test
+    fun `new chat with no message leaves repository unchanged`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+
+        coordinator.createNewChat()
+        advanceUntilIdle()
+
+        assertTrue(repository.listSessions().isEmpty())
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+    }
+
+    @Test
+    fun `first typed user turn creates exactly one persistent session`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+
+        owner.set(listOf(user("typed first message")))
+        advanceUntilIdle()
+
+        assertEquals(1, repository.listSessions().size)
+        assertEquals(ActiveConversation.Persistent(repository.listSessions().single().id), coordinator.activeConversation.value)
+        assertEquals("typed first message", repository.loadSession(coordinator.persistentId())?.messages?.single()?.text)
+    }
+
+    @Test
+    fun `first voice originated user turn creates exactly one persistent session`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+
+        owner.set(listOf(user("voice transcribed first message")))
+        advanceUntilIdle()
+
+        assertEquals(1, repository.listSessions().size)
+        assertEquals(ActiveConversation.Persistent(repository.listSessions().single().id), coordinator.activeConversation.value)
+    }
+
+    @Test
+    fun `assistant or notice only events do not create a draft session`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+
+        owner.set(listOf(ConversationMessage(ConversationRole.Assistant, "orphan")))
+        advanceUntilIdle()
+        owner.set(listOf(ConversationMessage(ConversationRole.Notice, "notice")))
+        advanceUntilIdle()
+
+        assertTrue(repository.listSessions().isEmpty())
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+    }
+
+    @Test
+    fun `opening existing chat abandons untouched draft without persistence`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        val existing = repository.createSession()
+
+        coordinator.openChat(existing.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf(existing.id), repository.listSessions().map { it.id })
+        assertEquals(ActiveConversation.Persistent(existing.id), coordinator.activeConversation.value)
         assertTrue(owner.conversation.value.isEmpty())
     }
 
@@ -50,16 +129,18 @@ class ChatSessionCoordinatorTest {
         val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
         coordinator.start()
         advanceUntilIdle()
-        val oldId = coordinator.activeId.value!!
         owner.set(listOf(user("old")))
         advanceUntilIdle()
+        val oldId = coordinator.persistentId()
 
         coordinator.createNewChat()
         advanceUntilIdle()
 
-        assertNotEquals(oldId, coordinator.activeId.value)
+        assertEquals(1, repository.listSessions().size)
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+        assertEquals(oldId, repository.listSessions().single().id)
         assertTrue(owner.conversation.value.isEmpty())
-        assertTrue(repository.loadSession(coordinator.activeId.value!!)?.messages.orEmpty().isEmpty())
+        assertEquals("old", repository.loadSession(oldId)?.messages?.single()?.text)
     }
 
     @Test
@@ -77,7 +158,7 @@ class ChatSessionCoordinatorTest {
         coordinator.openChat(first.id)
         advanceUntilIdle()
 
-        assertEquals(first.id, coordinator.activeId.value)
+        assertEquals(first.id, coordinator.persistentId())
         assertEquals("first", owner.conversation.value.single().text)
     }
 
@@ -98,7 +179,7 @@ class ChatSessionCoordinatorTest {
         coordinator.deleteChat(second.id)
         advanceUntilIdle()
 
-        assertEquals(first.id, coordinator.activeId.value)
+        assertEquals(first.id, coordinator.persistentId())
         assertEquals("first", owner.conversation.value.single().text)
         assertNull(repository.loadSession(second.id))
     }
@@ -115,8 +196,9 @@ class ChatSessionCoordinatorTest {
         coordinator.deleteChat(only.id)
         advanceUntilIdle()
 
-        assertNotEquals(only.id, coordinator.activeId.value)
-        assertEquals(1, coordinator.sessions.value.size)
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+        assertNotEquals(only.id, coordinator.persistentIdOrNull())
+        assertEquals(0, coordinator.sessions.value.size)
         assertTrue(owner.conversation.value.isEmpty())
     }
 
@@ -158,6 +240,7 @@ class ChatSessionCoordinatorTest {
         assertEquals(1, generator.calls)
         generator.release()
         advanceUntilIdle()
+        assertEquals(ChatTitleSource.Derived, repository.listSessions().single().titleSource)
         owner.set(eligibleMessages() + user("again"))
         advanceUntilIdle()
         assertEquals(1, generator.calls)
@@ -181,6 +264,44 @@ class ChatSessionCoordinatorTest {
         val session = repository.listSessions().single()
         assertEquals("Project plan", session.title)
         assertEquals(before, session.updatedAt)
+        assertEquals("Project plan", coordinator.sessions.value.single().title)
+    }
+
+    @Test
+    fun `null title falls back to first user message`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = null)
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        owner.set(eligibleMessages())
+        advanceUntilIdle()
+        generator.release()
+        advanceUntilIdle()
+
+        val session = repository.listSessions().single()
+        assertTrue(session.title!!.startsWith("Please help me plan"))
+        assertTrue(session.title!!.length <= 60)
+        assertEquals(ChatTitleSource.Derived, session.titleSource)
+    }
+
+    @Test
+    fun `blank title falls back without exception text`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = " \n ``` ")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        owner.set(eligibleMessages())
+        advanceUntilIdle()
+        generator.release()
+        advanceUntilIdle()
+
+        val session = repository.listSessions().single()
+        assertTrue(session.title!!.startsWith("Please help"))
+        assertEquals(ChatTitleSource.Derived, session.titleSource)
     }
 
     @Test
@@ -193,7 +314,7 @@ class ChatSessionCoordinatorTest {
         advanceUntilIdle()
         owner.set(eligibleMessages())
         advanceUntilIdle()
-        repository.updateTitle(coordinator.activeId.value!!, "Manual title", ChatTitleSource.Manual)
+        repository.updateTitle(coordinator.persistentId(), "Manual title", ChatTitleSource.Manual)
         generator.release()
         advanceUntilIdle()
 
@@ -236,7 +357,7 @@ class ChatSessionCoordinatorTest {
         coordinator.openChat(second.id)
         advanceUntilIdle()
 
-        assertEquals(first.id, coordinator.activeId.value)
+        assertEquals(first.id, coordinator.persistentId())
         assertTrue(owner.conversation.value.isEmpty())
     }
 
@@ -281,4 +402,10 @@ class ChatSessionCoordinatorTest {
     )
 
     private fun user(text: String) = ConversationMessage(ConversationRole.User, text)
+
+    private fun ChatSessionCoordinator.persistentId() =
+        (activeConversation.value as ActiveConversation.Persistent).sessionId
+
+    private fun ChatSessionCoordinator.persistentIdOrNull() =
+        (activeConversation.value as? ActiveConversation.Persistent)?.sessionId
 }

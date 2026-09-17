@@ -35,6 +35,12 @@ class ChatSessionTest {
         )
     }
 
+    @Test
+    fun `short first completed turn is title eligible`() {
+        val messages = listOf(user("Привет"), assistant("Привет!"))
+        assertTrue(shouldGenerateChatTitle(ChatSession("chat", createdAt = 1L, updatedAt = 1L), messages))
+    }
+
     private fun user(text: String) = ConversationMessage(ConversationRole.User, text)
     private fun assistant(text: String) = ConversationMessage(ConversationRole.Assistant, text)
 }

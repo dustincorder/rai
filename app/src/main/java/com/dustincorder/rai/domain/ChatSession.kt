@@ -17,6 +17,7 @@ data class ChatSession(
 enum class ChatTitleSource {
     Default,
     Generated,
+    Derived,
     Manual,
 }
 
@@ -47,10 +48,38 @@ interface ConversationOwner {
     fun replaceConversation(messages: List<ConversationMessage>): Boolean
 }
 
+sealed interface ActiveConversation {
+    data object NewDraft : ActiveConversation
+    data class Persistent(val sessionId: String) : ActiveConversation
+}
+
 fun shouldGenerateChatTitle(session: ChatSession, messages: List<ConversationMessage>): Boolean {
     if (session.titleSource != ChatTitleSource.Default || session.titleGenerationAttempted) return false
-    val userCount = messages.count { it.role == ConversationRole.User }
+    val hasUser = messages.any { it.role == ConversationRole.User && it.contextText.isNotBlank() }
     val hasAssistant = messages.any { it.role == ConversationRole.Assistant }
-    val userTextLength = messages.filter { it.role == ConversationRole.User }.sumOf { it.contextText.length }
-    return hasAssistant && (userTextLength >= 40 || userCount >= 2)
+    return hasUser && hasAssistant
+}
+
+fun deriveChatTitle(messages: List<ConversationMessage>): String? {
+    val source = messages.firstOrNull {
+        it.role == ConversationRole.User && it.contextText.isNotBlank()
+    }?.contextText ?: return null
+    val clean = source.replace(Regex("\\s+"), " ").trim().trim('"', '\'')
+    if (clean.isBlank()) return null
+    if (clean.length <= 50) return clean
+    return clean.take(50).substringBeforeLast(' ').trimEnd().ifBlank { clean.take(50) } + "…"
+}
+
+fun sanitizeChatTitle(raw: String?): String? {
+    val clean = raw.orEmpty()
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .removePrefix("```")
+        .removeSuffix("```")
+        .trim()
+        .replace(Regex("^(#+|[-*])\\s+"), "")
+        .trim('"', '\'')
+        .take(60)
+        .trim()
+    return clean.takeIf { it.isNotBlank() && it.any(Char::isLetterOrDigit) }
 }

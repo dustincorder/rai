@@ -99,6 +99,21 @@ class FileChatSessionRepositoryTest {
     }
 
     @Test
+    fun `legacy empty default sessions are pruned without deleting non-empty sessions`() = runTest {
+        var nextId = 0
+        val repository = FileChatSessionRepository(root, idFactory = { "chat-${nextId++}" })
+        val empty = repository.createSession()
+        val nonEmpty = repository.createSession()
+        repository.saveMessages(nonEmpty.id, listOf(message("keep this")))
+
+        val recreated = FileChatSessionRepository(root, idFactory = { "unused" })
+
+        assertEquals(listOf(nonEmpty.id), recreated.listSessions().map { it.id })
+        assertNull(recreated.loadSession(empty.id))
+        assertEquals("keep this", recreated.loadSession(nonEmpty.id)?.messages?.single()?.text)
+    }
+
+    @Test
     fun `invalid index and transcript fail closed`() = runTest {
         File(root, "chat-index.json").writeText("not json")
         val repository = FileChatSessionRepository(root, idFactory = { "chat" })

@@ -102,8 +102,10 @@ class FileChatSessionRepository(
     private suspend fun <T> onIo(block: suspend () -> T): T = withContext(ioDispatcher) {
         initializationMutex.withLock {
             if (!initialized) {
-                _sessions.value = readIndex()
+                val (sessions, pruned) = readIndex()
+                _sessions.value = sessions
                 initialized = true
+                if (pruned) publish(sessions)
             }
         }
         block()
@@ -134,13 +136,30 @@ class FileChatSessionRepository(
         }
     }
 
-    private fun readIndex(): List<ChatSession> {
-        if (!indexFile.isFile) return emptyList()
+    private fun readIndex(): Pair<List<ChatSession>, Boolean> {
+        if (!indexFile.isFile) return emptyList<ChatSession>() to false
         return runCatching {
-            json.decodeFromString<ChatIndex>(indexFile.readText()).sessions
-                .filter { File(root, "${it.id}.json").isFile }
+            var pruned = false
+            val sessions = json.decodeFromString<ChatIndex>(indexFile.readText()).sessions
+                .mapNotNull { session ->
+                    val transcriptFile = File(root, "${session.id}.json")
+                    if (!transcriptFile.isFile) return@mapNotNull null
+                    val transcript = runCatching {
+                        json.decodeFromString<ChatTranscript>(transcriptFile.readText())
+                    }.getOrNull()
+                    if (transcript?.sessionId == session.id && transcript.messages.isEmpty() &&
+                        session.title == null && session.titleSource == ChatTitleSource.Default
+                    ) {
+                        transcriptFile.delete()
+                        pruned = true
+                        null
+                    } else {
+                        session
+                    }
+                }
                 .sortedByDescending { it.updatedAt }
+            sessions to pruned
         }
-            .getOrDefault(emptyList())
+            .getOrDefault(emptyList<ChatSession>() to false)
     }
 }
