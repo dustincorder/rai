@@ -65,7 +65,11 @@ class ChatSessionCoordinator(
         repository.saveMessages(session.id, messages)
         _activeConversation.value = ActiveConversation.Persistent(session.id)
         _sessions.value = repository.listSessions()
-        launchTitleAttempt(session.id, messages)
+        if (shouldGenerateChatTitle(session, messages)) {
+            repository.markTitleGenerationAttempted(session.id)
+            _sessions.value = repository.listSessions()
+            launchTitleAttempt(session.id, messages)
+        }
     }
 
     fun openChat(id: String) = launchReady {

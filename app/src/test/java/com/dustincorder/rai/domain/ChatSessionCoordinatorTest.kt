@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -429,6 +430,77 @@ class ChatSessionCoordinatorTest {
         assertEquals(1, sessions.size)
         assertEquals(ActiveConversation.Persistent(sessions.single().id), coordinator.activeConversation.value)
         assertEquals(transcript, repository.loadSession(sessions.single().id)?.messages)
+    }
+
+    @Test
+    fun `saving eligible temporary chat marks one title attempt before launch`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = "Saved title")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(eligibleMessages())
+        advanceUntilIdle()
+
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        assertTrue(repository.listSessions().single().titleGenerationAttempted)
+        assertEquals(1, generator.calls)
+        generator.release()
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `saved temporary title request is not repeated after another message`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = "Saved title")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(eligibleMessages())
+        advanceUntilIdle()
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        owner.set(eligibleMessages() + user("A later message"))
+        advanceUntilIdle()
+
+        assertEquals(1, generator.calls)
+        generator.release()
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `ineligible saved temporary chat starts one attempt when later eligible`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = "Later title")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("short initial")))
+        advanceUntilIdle()
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        assertFalse(repository.listSessions().single().titleGenerationAttempted)
+        assertEquals(0, generator.calls)
+        owner.set(listOf(user("short initial"), assistant("answer")))
+        advanceUntilIdle()
+
+        assertEquals(1, generator.calls)
+        assertTrue(repository.listSessions().single().titleGenerationAttempted)
+        generator.release()
+        advanceUntilIdle()
     }
 
     @Test
