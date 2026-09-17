@@ -1,5 +1,8 @@
 package com.dustincorder.rai.domain
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class RayaErrorCode {
     ReplyUnavailable,
     RecognitionStartFailed,
@@ -7,6 +10,7 @@ enum class RayaErrorCode {
     VoicePipelineFailed,
 }
 
+@Serializable
 enum class RayaNoticeCode {
     InactivityEnded,
 }

@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.CallEnd
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MicNone
@@ -94,6 +95,7 @@ private val EMPTY_CONVERSATION_TOP_PADDING_DP = 360.dp
 @Composable
 fun RayaScreen(
     state: RayaUiState,
+    chatId: String? = null,
     onSubmitText: (String) -> Unit,
     onVoiceChatClick: () -> Unit,
     onEndVoiceSession: () -> Unit,
@@ -101,12 +103,14 @@ fun RayaScreen(
     onInterruptSpeech: () -> Unit,
     onSettingsClick: () -> Unit,
     onClearConversation: () -> Unit,
+    onChatHistoryClick: () -> Unit = {},
 ) {
     var draft by remember { mutableStateOf("") }
     val canClear = state.conversation.isNotEmpty() &&
         !state.voiceSessionActive &&
         !state.isBusy
     var showClearDialog by remember { mutableStateOf(false) }
+    val canSwitchChat = !state.voiceSessionActive && !state.isBusy
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -123,6 +127,9 @@ fun RayaScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onChatHistoryClick, enabled = canSwitchChat) {
+                        Icon(Icons.Outlined.History, contentDescription = stringResource(R.string.chat_history))
+                    }
                     IconButton(
                         onClick = { showClearDialog = true },
                         enabled = canClear,
@@ -149,6 +156,7 @@ fun RayaScreen(
             ) {
                 ConversationArea(
                     state = state,
+                    chatId = chatId,
                     modifier = Modifier.fillMaxSize(),
                 )
                 FaceHeader(
@@ -388,6 +396,7 @@ private object ThinkingIndicator
 @Composable
 private fun ConversationArea(
     state: RayaUiState,
+    chatId: String?,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -406,6 +415,10 @@ private fun ConversationArea(
     }
     var tailPolicy by remember { mutableStateOf(ConversationTailPolicyState()) }
     val currentItemCount = rememberUpdatedState(items.size)
+
+    LaunchedEffect(chatId) {
+        tailPolicy = ConversationTailPolicyState()
+    }
 
     LaunchedEffect(listState) {
         snapshotFlow {

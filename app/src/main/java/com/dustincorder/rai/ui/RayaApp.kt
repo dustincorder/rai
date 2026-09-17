@@ -70,6 +70,9 @@ import com.dustincorder.rai.presentation.SettingsViewModel
 import com.dustincorder.rai.ui.designsystem.RayaSection
 import com.dustincorder.rai.ui.designsystem.RayaSpacing
 import com.dustincorder.rai.ui.designsystem.RayaSurface
+import com.dustincorder.rai.ui.raya.face.RayaFace
+import com.dustincorder.rai.presentation.model.RayaFaceEmotion
+import com.dustincorder.rai.presentation.model.RayaFaceState
 import com.dustincorder.rai.ui.theme.RayaTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -79,6 +82,7 @@ private object RayaRoute {
     const val Onboarding = "onboarding"
     const val Main = "main"
     const val Settings = "settings"
+    const val History = "history"
 }
 
 @Composable
@@ -94,6 +98,8 @@ fun RayaApp(
     val apiKeyStatus by settingsViewModel.apiKeyStatus.collectAsStateWithLifecycle()
     val apiKeyStatusProvider by settingsViewModel.apiKeyStatusProvider.collectAsStateWithLifecycle()
     val uiState by rayaViewModel.uiState.collectAsStateWithLifecycle()
+    val chatSessions by rayaViewModel.chatSessions.collectAsStateWithLifecycle()
+    val activeChatId by rayaViewModel.activeChatId.collectAsStateWithLifecycle()
     var onboardingAppearance by remember { mutableStateOf<AppearanceMode?>(null) }
 
     LaunchedEffect(Unit) {
@@ -135,6 +141,7 @@ fun RayaApp(
             composable(RayaRoute.Main) {
                 RayaScreen(
                     state = uiState,
+                    chatId = activeChatId,
                     onSubmitText = rayaViewModel::submitText,
                     onVoiceChatClick = onVoiceChatClick,
                     onEndVoiceSession = rayaViewModel::endVoiceSession,
@@ -145,6 +152,20 @@ fun RayaApp(
                         navController.navigate(RayaRoute.Settings)
                     },
                     onClearConversation = rayaViewModel::clearConversation,
+                    onChatHistoryClick = {
+                        if (uiState.voiceSessionActive) rayaViewModel.endVoiceSession()
+                        navController.navigate(RayaRoute.History)
+                    },
+                )
+            }
+            composable(RayaRoute.History) {
+                ChatHistoryScreen(
+                    sessions = chatSessions,
+                    activeId = activeChatId,
+                    onBack = { navController.popBackStack() },
+                    onNewChat = { rayaViewModel.createNewChat(); navController.popBackStack() },
+                    onOpen = { id -> rayaViewModel.openChat(id); navController.popBackStack() },
+                    onDelete = rayaViewModel::deleteChat,
                 )
             }
             composable(RayaRoute.Settings) {
@@ -243,7 +264,13 @@ private fun OnboardingScreen(
                 RayaSurface(modifier = Modifier.fillMaxWidth()) {
                     RayaSection(stringResource(titles[step])) {
                         when (step) {
-                            0 -> Text(stringResource(R.string.onboarding_welcome_body))
+                        0 -> Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                                RayaFace(
+                                    state = RayaFaceState(emotion = RayaFaceEmotion.Happy),
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                )
+                                Text(stringResource(R.string.onboarding_welcome_body))
+                            }
                             1 -> ChoiceRow(
                                 listOf(AppearanceMode.Raya, AppearanceMode.Dynamic),
                                 draft.appearanceMode,

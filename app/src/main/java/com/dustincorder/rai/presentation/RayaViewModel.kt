@@ -6,7 +6,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.RayaApplication
+import com.dustincorder.rai.domain.ChatSession
+import com.dustincorder.rai.domain.ChatSessionCoordinator
+import com.dustincorder.rai.domain.ChatSessionRepository
+import com.dustincorder.rai.domain.ChatTitleGenerator
 import com.dustincorder.rai.domain.ConversationMessage
+import com.dustincorder.rai.domain.ActiveConversation
 import com.dustincorder.rai.domain.BargeInMonitor
 import com.dustincorder.rai.domain.InteractionMode
 import com.dustincorder.rai.domain.RayaEmotion
@@ -22,6 +27,7 @@ import com.dustincorder.rai.speech.AndroidSpeechSynthesisProvider
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 class RayaViewModel(
@@ -29,6 +35,8 @@ class RayaViewModel(
     speechSynthesis: SpeechSynthesisProvider,
     replyProvider: ReplyProvider,
     bargeInMonitor: BargeInMonitor? = null,
+    chatRepository: ChatSessionRepository? = null,
+    titleGenerator: ChatTitleGenerator? = null,
     routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
 ) : ViewModel() {
@@ -41,6 +49,19 @@ class RayaViewModel(
         routingDiagnostics = routingDiagnostics,
         voiceDiagnostics = voiceDiagnostics,
     )
+
+    private val chatCoordinator = chatRepository?.let {
+        ChatSessionCoordinator(viewModelScope, it, orchestrator, titleGenerator)
+    }
+    val chatSessions: StateFlow<List<ChatSession>> = chatCoordinator?.sessions
+        ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())
+    val activeConversation: StateFlow<ActiveConversation> = chatCoordinator?.activeConversation
+        ?: kotlinx.coroutines.flow.MutableStateFlow(ActiveConversation.NewDraft)
+    val activeChatId: StateFlow<String?> = activeConversation.map { active ->
+        (active as? ActiveConversation.Persistent)?.sessionId
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    init { chatCoordinator?.start() }
 
     val uiState: StateFlow<RayaUiState> = combine(
         combine(
@@ -97,6 +118,12 @@ class RayaViewModel(
     fun clearConversation() = orchestrator.clearConversation()
     fun showError(message: String) = orchestrator.reportError(message)
 
+    fun createNewChat() = chatCoordinator?.createNewChat()
+
+    fun openChat(id: String) = chatCoordinator?.openChat(id)
+
+    fun deleteChat(id: String) = chatCoordinator?.deleteChat(id)
+
     override fun onCleared() {
         orchestrator.close()
         super.onCleared()
@@ -111,6 +138,8 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
             speechRecognition = application.runtimeSpeechRecognitionProvider(),
             speechSynthesis = application.runtimeSpeechSynthesisProvider(),
             bargeInMonitor = application.bargeInMonitor,
+            chatRepository = application.chatRepository,
+            titleGenerator = application.replyProvider,
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
             voiceDiagnostics = AndroidRayaVoiceDiagnostics(),

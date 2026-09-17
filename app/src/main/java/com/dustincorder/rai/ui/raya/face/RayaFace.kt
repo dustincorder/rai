@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,8 +37,8 @@ import com.dustincorder.rai.ui.theme.RayaTheme
 import kotlin.math.min
 import kotlin.random.Random
 
-private val EyeCyan = Color(0xFF00A8B5)
 private val BlushPink = Color(0xFFE66F88)
+private const val EYE_CORNER_FRACTION = 0.24f
 
 private enum class EyeShape {
     Block,
@@ -103,12 +104,14 @@ fun RayaFace(
 
     val gazeX by animateFloatAsState(state.gaze.horizontalOffset, tween(420), label = "gaze-x")
     val gazeY by animateFloatAsState(state.gaze.verticalOffset, tween(420), label = "gaze-y")
+    val eyeColor = MaterialTheme.colorScheme.primary
     Canvas(
         modifier = modifier
             .aspectRatio(1.15f),
     ) {
         drawFace(
             state = state,
+            color = eyeColor,
             blinking = state.blinking || automaticBlink,
             gazeX = gazeX,
             gazeY = gazeY,
@@ -137,6 +140,7 @@ private val RayaGaze.verticalOffset: Float
 
 private fun DrawScope.drawFace(
     state: RayaFaceState,
+    color: Color,
     blinking: Boolean,
     gazeX: Float,
     gazeY: Float,
@@ -150,7 +154,6 @@ private fun DrawScope.drawFace(
     val height = size.height
     val eyeSize = min(width, height) * 0.14f
     val centerY = height * (0.48f + gazeY + if (state.emotion == RayaFaceEmotion.Calm) idleDrift * 0.004f else 0f)
-    val color = EyeCyan
     val listeningScale = if (state.emotion == RayaFaceEmotion.Listening) 1f + listeningPulse * 0.08f else 1f
     val speakingScale = if (state.speaking) 1f + speakingPulse * 0.06f else 1f
     val shapeScale = listeningScale * speakingScale
@@ -242,7 +245,12 @@ private fun DrawScope.drawEye(
 ) {
     val closedHeight = size.height * 0.012f
     if (blinking) {
-        drawRect(color, point(x - width / 2f, y - closedHeight / 2f), dimensions(width, closedHeight))
+        drawRoundRect(
+            color = color,
+            topLeft = point(x - width / 2f, y - closedHeight / 2f),
+            size = dimensions(width, closedHeight),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(closedHeight / 2f),
+        )
         return
     }
     val left = x - width / 2f
@@ -250,6 +258,16 @@ private fun DrawScope.drawEye(
     val top = y - height / 2f
     val bottom = y + height / 2f
     val thick = height * 0.28f
+    fun roundedRect(centerX: Float, centerY: Float, rectWidth: Float, rectHeight: Float) {
+        drawRoundRect(
+            color = color,
+            topLeft = point(centerX - rectWidth / 2f, centerY - rectHeight / 2f),
+            size = dimensions(rectWidth, rectHeight),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                min(rectHeight * EYE_CORNER_FRACTION, rectHeight / 2f),
+            ),
+        )
+    }
     fun path(points: List<Pair<Float, Float>>) = Path().apply {
         moveTo(points.first().first, points.first().second)
         points.drop(1).forEach { lineTo(it.first, it.second) }
@@ -258,24 +276,11 @@ private fun DrawScope.drawEye(
     when (shape) {
         EyeShape.Block,
         EyeShape.Open,
-        -> drawRect(color, point(left, top), dimensions(width, height))
-        EyeShape.SmallBlock -> drawRect(
-            color,
-            point(x - width * 0.3f, y - height * 0.3f),
-            dimensions(width * 0.6f, height * 0.6f),
-        )
-        EyeShape.Excited -> drawRoundRect(
-            color = color,
-            topLeft = point(left, top),
-            size = dimensions(width, height),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(height * 0.2f),
-        )
-        EyeShape.Flat -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
-        EyeShape.Wink -> drawRect(
-            color,
-            point(x - width * 0.36f, y - thick / 2f),
-            dimensions(width * 0.72f, thick),
-        )
+        -> roundedRect(x, y, width, height)
+        EyeShape.SmallBlock -> roundedRect(x, y, width * 0.6f, height * 0.6f)
+        EyeShape.Excited -> roundedRect(x, y, width, height)
+        EyeShape.Flat -> roundedRect(x, y, width, thick)
+        EyeShape.Wink -> roundedRect(x, y, width * 0.72f, thick)
         EyeShape.PlayfulWink -> drawPath(
             path(listOf(
                 (left + width * 0.12f) to (y + thick * 0.1f),
@@ -285,7 +290,7 @@ private fun DrawScope.drawEye(
             )),
             color,
         )
-        EyeShape.Tired -> drawRect(color, point(left, y - thick / 2f), dimensions(width, thick))
+        EyeShape.Tired -> roundedRect(x, y, width, thick)
         EyeShape.Chevron -> drawPath(
             path(listOf(
                 left to bottom,
@@ -301,21 +306,9 @@ private fun DrawScope.drawEye(
             path(listOf(left to (top + thick), (left + width * 0.2f) to top, right to top, right to bottom, left to bottom)),
             color,
         )
-        EyeShape.Thinking -> drawRect(
-            color,
-            point(left + width * 0.18f, y - height * 0.2f),
-            dimensions(width * 0.82f, height * 0.4f),
-        )
-        EyeShape.ConfusedLeft -> drawRect(
-            color,
-            point(left + width * 0.08f, y - height * 0.26f),
-            dimensions(width * 0.84f, height * 0.42f),
-        )
-        EyeShape.ConfusedRight -> drawRect(
-            color,
-            point(left + width * 0.08f, y - height * 0.16f),
-            dimensions(width * 0.84f, height * 0.42f),
-        )
+        EyeShape.Thinking -> roundedRect(x + width * 0.09f, y - height * 0.0f, width * 0.82f, height * 0.4f)
+        EyeShape.ConfusedLeft -> roundedRect(x + width * 0.0f, y - height * 0.05f, width * 0.84f, height * 0.62f)
+        EyeShape.ConfusedRight -> roundedRect(x + width * 0.0f, y + height * 0.05f, width * 0.84f, height * 0.62f)
         EyeShape.ConcernedLeft -> drawPath(
             path(listOf(left to (top + height * 0.1f), right to top, right to bottom, left to bottom)),
             color,
