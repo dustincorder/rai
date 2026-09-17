@@ -1,6 +1,7 @@
 package com.dustincorder.rai.domain
 
 import kotlinx.serialization.Serializable
+import kotlinx.coroutines.flow.Flow
 
 @Serializable
 data class ChatSession(
@@ -26,7 +27,8 @@ data class ChatTranscript(
 )
 
 interface ChatSessionRepository {
-    val sessions: kotlinx.coroutines.flow.Flow<List<ChatSession>>
+    val sessions: Flow<List<ChatSession>>
+    suspend fun listSessions(): List<ChatSession>
     suspend fun createSession(): ChatSession
     suspend fun loadSession(id: String): ChatTranscript?
     suspend fun saveMessages(id: String, messages: List<ConversationMessage>)
@@ -37,6 +39,12 @@ interface ChatSessionRepository {
 
 interface ChatTitleGenerator {
     suspend fun generate(messages: List<ConversationMessage>): String?
+}
+
+interface ConversationOwner {
+    val conversation: kotlinx.coroutines.flow.StateFlow<List<ConversationMessage>>
+    fun canReplaceConversation(): Boolean
+    fun replaceConversation(messages: List<ConversationMessage>): Boolean
 }
 
 fun shouldGenerateChatTitle(session: ChatSession, messages: List<ConversationMessage>): Boolean {

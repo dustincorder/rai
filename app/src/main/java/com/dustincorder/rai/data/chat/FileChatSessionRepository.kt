@@ -12,7 +12,11 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -28,50 +32,81 @@ class FileChatSessionRepository(
     private val now: () -> Long = { System.currentTimeMillis() },
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
     private val json: Json = Json { ignoreUnknownKeys = true },
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ChatSessionRepository {
     private val indexFile = File(root, "chat-index.json")
-    private val _sessions = MutableStateFlow(readIndex())
+    private val _sessions = MutableStateFlow<List<ChatSession>>(emptyList())
+    private var initialized = false
+    private val initializationMutex = Mutex()
     private val mutationMutex = Mutex()
-    override val sessions: Flow<List<ChatSession>> = _sessions.asStateFlow()
-
-    override suspend fun createSession(): ChatSession = mutationMutex.withLock {
-        val timestamp = now()
-        val session = ChatSession(idFactory(), createdAt = timestamp, updatedAt = timestamp)
-        writeTranscript(ChatTranscript(session.id, emptyList()))
-        publish(_sessions.value + session)
-        session
+    override val sessions: Flow<List<ChatSession>> = flow {
+        listSessions()
+        emitAll(_sessions)
     }
 
-    override suspend fun loadSession(id: String): ChatTranscript? {
+    override suspend fun listSessions(): List<ChatSession> = onIo { _sessions.value }
+
+    override suspend fun createSession(): ChatSession = onIo {
+        mutationMutex.withLock {
+            val timestamp = now()
+            val session = ChatSession(idFactory(), createdAt = timestamp, updatedAt = timestamp)
+            writeTranscript(ChatTranscript(session.id, emptyList()))
+            publish(_sessions.value + session)
+            session
+        }
+    }
+
+    override suspend fun loadSession(id: String): ChatTranscript? = onIo {
         val file = File(root, "$id.json")
-        if (!file.isFile) return null
-        return runCatching { json.decodeFromString<ChatTranscript>(file.readText()) }
-            .getOrNull()
-            ?.takeIf { it.sessionId == id }
+        if (!file.isFile) return@onIo null
+        runCatching { json.decodeFromString<ChatTranscript>(file.readText()) }
+            .getOrNull()?.takeIf { it.sessionId == id }
     }
 
-    override suspend fun saveMessages(id: String, messages: List<ConversationMessage>) = mutationMutex.withLock {
-        if (_sessions.value.none { it.id == id }) return
-        writeTranscript(ChatTranscript(id, messages))
-        val timestamp = now()
-        publish(_sessions.value.map { if (it.id == id) it.copy(updatedAt = timestamp) else it })
+    override suspend fun saveMessages(id: String, messages: List<ConversationMessage>) = onIo {
+        mutationMutex.withLock {
+            if (_sessions.value.none { it.id == id }) return@withLock
+            writeTranscript(ChatTranscript(id, messages))
+            val timestamp = now()
+            publish(_sessions.value.map { if (it.id == id) it.copy(updatedAt = timestamp) else it })
+        }
     }
 
-    override suspend fun updateTitle(id: String, title: String, source: ChatTitleSource) = mutationMutex.withLock {
-        val clean = title.replace(Regex("\\s+"), " ").trim().trim('"', '\'').take(60)
-        if (clean.isBlank()) return
-        publish(_sessions.value.map { if (it.id == id) it.copy(title = clean, titleSource = source, updatedAt = now()) else it })
+    override suspend fun updateTitle(id: String, title: String, source: ChatTitleSource) = onIo {
+        mutationMutex.withLock {
+            val clean = title.replace(Regex("\\s+"), " ").trim().trim('"', '\'').take(60)
+            if (clean.isBlank()) return@withLock
+            publish(_sessions.value.map { session ->
+                if (session.id != id ||
+                    (source != ChatTitleSource.Manual && session.titleSource != ChatTitleSource.Default)
+                ) session else session.copy(title = clean, titleSource = source)
+            })
+        }
     }
 
-    override suspend fun markTitleGenerationAttempted(id: String) = mutationMutex.withLock {
-        publish(_sessions.value.map { if (it.id == id) it.copy(titleGenerationAttempted = true) else it })
+    override suspend fun markTitleGenerationAttempted(id: String) = onIo {
+        mutationMutex.withLock {
+            publish(_sessions.value.map { if (it.id == id) it.copy(titleGenerationAttempted = true) else it })
+        }
     }
 
     override suspend fun deleteSession(id: String) {
-        mutationMutex.withLock {
-            publish(_sessions.value.filterNot { it.id == id })
-            File(root, "$id.json").delete()
+        onIo {
+            mutationMutex.withLock {
+                publish(_sessions.value.filterNot { it.id == id })
+                File(root, "$id.json").delete()
+            }
         }
+    }
+
+    private suspend fun <T> onIo(block: suspend () -> T): T = withContext(ioDispatcher) {
+        initializationMutex.withLock {
+            if (!initialized) {
+                _sessions.value = readIndex()
+                initialized = true
+            }
+        }
+        block()
     }
 
     private fun publish(sessions: List<ChatSession>) {

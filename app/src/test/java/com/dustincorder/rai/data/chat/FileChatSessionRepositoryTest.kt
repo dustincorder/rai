@@ -31,12 +31,15 @@ class FileChatSessionRepositoryTest {
     @Test
     fun `sessions survive repository recreation and sort by update time`() = runTest {
         var clock = 10L
-        val first = FileChatSessionRepository(root, now = { clock++ }, idFactory = { "first" })
+        var nextId = 0
+        val first = FileChatSessionRepository(root, now = { clock++ }, idFactory = { if (nextId++ == 0) "first" else "newer" })
         val created = first.createSession()
         first.saveMessages(created.id, listOf(message("hello")))
+        val newer = first.createSession()
+        first.saveMessages(newer.id, listOf(message("newer")))
         val recreated = FileChatSessionRepository(root, now = { clock++ }, idFactory = { "second" })
 
-        assertEquals(listOf(created.id), recreated.sessions.first().map { it.id })
+        assertEquals(listOf(newer.id, created.id), recreated.sessions.first().map { it.id })
         assertEquals(listOf("hello"), recreated.loadSession(created.id)?.messages?.map { it.text })
     }
 
@@ -62,6 +65,37 @@ class FileChatSessionRepositoryTest {
         assertEquals("one two", stored.title)
         assertEquals(ChatTitleSource.Generated, stored.titleSource)
         assertTrue(stored.title!!.length <= 60)
+    }
+
+    @Test
+    fun `title metadata does not change conversation activity ordering`() = runTest {
+        var clock = 0L
+        val repository = FileChatSessionRepository(root, now = { ++clock }, idFactory = { "chat-$clock" })
+        val older = repository.createSession()
+        val newer = repository.createSession()
+        val olderUpdatedAt = repository.listSessions().single { it.id == older.id }.updatedAt
+        val newerUpdatedAt = repository.listSessions().single { it.id == newer.id }.updatedAt
+
+        repository.updateTitle(older.id, "Older title", ChatTitleSource.Generated)
+
+        val sessions = repository.listSessions()
+        assertEquals(newer.id, sessions.first().id)
+        assertEquals(olderUpdatedAt, sessions.single { it.id == older.id }.updatedAt)
+        assertEquals(newerUpdatedAt, sessions.single { it.id == newer.id }.updatedAt)
+    }
+
+    @Test
+    fun `manual title wins over generated title at repository boundary`() = runTest {
+        val repository = FileChatSessionRepository(root, idFactory = { "chat" })
+        val session = repository.createSession()
+        repository.markTitleGenerationAttempted(session.id)
+        repository.updateTitle(session.id, "Manual title", ChatTitleSource.Manual)
+
+        repository.updateTitle(session.id, "Late generated title", ChatTitleSource.Generated)
+
+        val stored = repository.listSessions().single()
+        assertEquals("Manual title", stored.title)
+        assertEquals(ChatTitleSource.Manual, stored.titleSource)
     }
 
     @Test

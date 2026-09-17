@@ -46,7 +46,7 @@ class RayaOrchestrator(
     private val voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
     private val now: () -> Long = { System.currentTimeMillis() },
     private val inactivityTimeoutMs: () -> Long = { USER_INACTIVITY_TIMEOUT_MS },
-) {
+) : ConversationOwner {
     private val _state = MutableStateFlow<RayaState>(RayaState.Idle)
     val state: StateFlow<RayaState> = _state.asStateFlow()
 
@@ -54,7 +54,7 @@ class RayaOrchestrator(
     val userText: StateFlow<String> = _userText.asStateFlow()
 
     private val _conversation = MutableStateFlow<List<ConversationMessage>>(emptyList())
-    val conversation: StateFlow<List<ConversationMessage>> = _conversation.asStateFlow()
+    override val conversation: StateFlow<List<ConversationMessage>> = _conversation.asStateFlow()
 
     private val _interactionMode = MutableStateFlow(InteractionMode.Text)
     val interactionMode: StateFlow<InteractionMode> = _interactionMode.asStateFlow()
@@ -290,13 +290,16 @@ class RayaOrchestrator(
         _lastResponseLanguageTag.value = null
     }
 
-    fun replaceConversation(messages: List<ConversationMessage>) {
-        if (_voiceSessionActive.value || textTurnInFlight) return
+    override fun canReplaceConversation(): Boolean = !_voiceSessionActive.value && !textTurnInFlight
+
+    override fun replaceConversation(messages: List<ConversationMessage>): Boolean {
+        if (_voiceSessionActive.value || textTurnInFlight) return false
         _conversation.value = messages
         _semanticEmotion.value = RayaEmotion.Calm
         _lastResponseLanguageTag.value = null
         _streamingText.value = ""
         _state.value = RayaState.Idle
+        return true
     }
 
     fun close() {
