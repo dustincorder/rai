@@ -16,6 +16,8 @@ Inspired by **Raya-Prime**, reimagined as a modern Android assistant rather than
 > Райя is currently under active development.
 > APIs, UI, architecture and features may change between versions.
 
+AI coding-agent guidance: `AGENTS.md`.
+
 ## ✨ What is Райя?
 
 Райя is an experimental open-source voice assistant for Android.
