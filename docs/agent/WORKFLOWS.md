@@ -44,8 +44,9 @@ adb shell pm clear com.dustincorder.rai
 
 ## Localization
 
-Strings: `app/src/main/res/values/strings.xml`, `values-ru/strings.xml`,
-`values-uk/strings.xml`. Add all three locales for every user-visible
+Strings: `app/src/main/res/values/strings.xml`,
+`app/src/main/res/values-ru/strings.xml`,
+`app/src/main/res/values-uk/strings.xml`. Add all three locales for every user-visible
 string; keep keys identical across the three files.
 
 ## Adding tests
