@@ -3,6 +3,7 @@ package com.dustincorder.rai.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -21,8 +22,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenu
@@ -61,6 +61,8 @@ import com.dustincorder.rai.speech.TtsModelCatalog
 import com.dustincorder.rai.presentation.ApiKeyStatus
 import com.dustincorder.rai.presentation.ConnectionStatus
 import com.dustincorder.rai.presentation.SettingsViewModel
+import com.dustincorder.rai.ui.designsystem.RayaShapes
+import com.dustincorder.rai.ui.designsystem.RayaSpacing
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,20 +78,31 @@ fun SettingsScreen(
     var apiKey by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
+    val providerLabels = mapOf(
+        LlmProviderPreset.OpenAI to stringResource(R.string.provider_openai),
+        LlmProviderPreset.Groq to stringResource(R.string.provider_groq),
+        LlmProviderPreset.Anthropic to stringResource(R.string.provider_anthropic),
+        LlmProviderPreset.Gemini to stringResource(R.string.provider_gemini),
+        LlmProviderPreset.Custom to stringResource(R.string.provider_custom),
+    )
+    val protocolLabels = mapOf(
+        LlmProtocol.OpenAiCompatible to stringResource(R.string.protocol_openai_compatible),
+        LlmProtocol.AnthropicCompatible to stringResource(R.string.protocol_anthropic_compatible),
+        LlmProtocol.Gemini to stringResource(R.string.protocol_gemini),
+    )
 
     LaunchedEffect(stored) { draft = stored }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.back))
-                    }
-                },
-            )
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.back)) }
+                Column(Modifier.padding(horizontal = 8.dp)) {
+                    Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.settings_subtitle), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         },
     ) { padding ->
         Column(
@@ -100,14 +113,19 @@ fun SettingsScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            SettingsPanel {
+                Text(stringResource(R.string.settings_raya), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.settings_personality_default), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.settings_raya_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            SettingsPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(stringResource(R.string.llm), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.settings_ai), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.provider), style = MaterialTheme.typography.labelMedium)
-                    ChipGrid(LlmProviderPreset.entries, draft.provider, { it.name }) { provider ->
+                    ChipGrid(LlmProviderPreset.entries, draft.provider, { providerLabels[it].orEmpty() }) { provider ->
                         draft = draft.copy(provider = provider, modelId = provider.defaultModel, useCustomModel = false, customModelId = "")
                         apiKey = ""
                         viewModel.refreshApiKeyStatus(provider)
@@ -118,7 +136,7 @@ fun SettingsScreen(
                         ChipGrid(
                             LlmProtocol.entries,
                             draft.customProtocol,
-                            { if (it == LlmProtocol.OpenAiCompatible) "OpenAI-compatible" else "Anthropic-compatible" },
+                            { protocolLabels[it].orEmpty() },
                         ) {
                             draft = draft.copy(customProtocol = it)
                         }
@@ -243,15 +261,16 @@ fun SettingsScreen(
                 }
             }
 
-            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            SettingsPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(stringResource(R.string.voice_section), style = MaterialTheme.typography.titleMedium)
-                    val systemEngineLabel = stringResource(R.string.system_engine)
+                     val systemEngineLabel = stringResource(R.string.system_engine)
+                     val whisperEngineLabel = stringResource(R.string.whisper_engine)
                     Text(stringResource(R.string.stt_engine), style = MaterialTheme.typography.labelMedium)
                     ChipGrid(
                         SttEngine.entries,
                         draft.sttEngine,
-                        { if (it == SttEngine.GroqWhisper) "Groq Whisper" else systemEngineLabel },
+                         { if (it == SttEngine.GroqWhisper) whisperEngineLabel else systemEngineLabel },
                     ) { draft = draft.copy(sttEngine = it) }
                     Text(stringResource(R.string.stt_model), style = MaterialTheme.typography.labelMedium)
                     OutlinedTextField(
@@ -283,6 +302,34 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsPanel {
+                Text(stringResource(R.string.settings_appearance), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.settings_appearance_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val rayaAppearance = stringResource(R.string.appearance_raya)
+                val dynamicAppearance = stringResource(R.string.appearance_dynamic)
+                ChipGrid(
+                    listOf(com.dustincorder.rai.data.settings.AppearanceMode.Raya, com.dustincorder.rai.data.settings.AppearanceMode.Dynamic),
+                    draft.appearanceMode,
+                    { if (it == com.dustincorder.rai.data.settings.AppearanceMode.Raya) rayaAppearance else dynamicAppearance },
+                ) { draft = draft.copy(appearanceMode = it) }
+            }
+
+            SettingsPanel {
+                Text(stringResource(R.string.settings_integrations), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.settings_integrations_empty), style = MaterialTheme.typography.bodyMedium)
+            }
+
+            SettingsPanel {
+                Text(stringResource(R.string.settings_privacy), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.settings_privacy_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            SettingsPanel {
+                Text(stringResource(R.string.settings_about), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.assistant_name), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.settings_build, BuildConfig.GIT_SHA), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
             val status = connectionStatus
             when (status) {
                 is ConnectionStatus.None -> Unit
@@ -304,13 +351,25 @@ fun SettingsScreen(
             }
             if (BuildConfig.DEBUG) {
                 Text(
-                    "Debug build ${BuildConfig.GIT_SHA}",
+                    stringResource(R.string.settings_build_debug, BuildConfig.GIT_SHA),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Spacer(Modifier.height(12.dp))
         }
+    }
+}
+
+@Composable
+private fun SettingsPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = modifier,
+        shape = RayaShapes.Surface,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        tonalElevation = 1.dp,
+    ) {
+        Column(Modifier.padding(RayaSpacing.Section), verticalArrangement = Arrangement.spacedBy(RayaSpacing.Compact), content = content)
     }
 }
 

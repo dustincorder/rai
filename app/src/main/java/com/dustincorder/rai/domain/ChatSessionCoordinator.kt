@@ -50,6 +50,24 @@ class ChatSessionCoordinator(
         _activeConversation.value = ActiveConversation.NewDraft
     }
 
+    fun startTemporaryChat() = launchReady {
+        if (!conversationOwner.canReplaceConversation()) return@launchReady
+        if (!conversationOwner.replaceConversation(emptyList())) return@launchReady
+        _activeConversation.value = ActiveConversation.Temporary
+    }
+
+    fun saveTemporaryChat() = launchReady {
+        if (_activeConversation.value != ActiveConversation.Temporary) return@launchReady
+        if (!conversationOwner.canReplaceConversation()) return@launchReady
+        val messages = conversationOwner.conversation.value
+        if (messages.none { it.role == ConversationRole.User && it.contextText.isNotBlank() }) return@launchReady
+        val session = repository.createSession()
+        repository.saveMessages(session.id, messages)
+        _activeConversation.value = ActiveConversation.Persistent(session.id)
+        _sessions.value = repository.listSessions()
+        launchTitleAttempt(session.id, messages)
+    }
+
     fun openChat(id: String) = launchReady {
         if (!conversationOwner.canReplaceConversation()) return@launchReady
         if (repository.listSessions().none { it.id == id }) return@launchReady
@@ -102,6 +120,11 @@ class ChatSessionCoordinator(
                         repository.saveMessages(session.id, messages)
                         _activeConversation.value = ActiveConversation.Persistent(session.id)
                         session.id
+                    }
+                    ActiveConversation.Temporary -> {
+                        if (isInitialEmission) return@withLock
+                        _sessions.value = repository.listSessions()
+                        return@withLock
                     }
                     is ActiveConversation.Persistent -> {
                         if (!isInitialEmission) repository.saveMessages(active.sessionId, messages)

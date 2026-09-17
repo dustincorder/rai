@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -28,6 +29,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.dustincorder.rai.R
 import com.dustincorder.rai.RayaApplication
@@ -74,7 +78,6 @@ import com.dustincorder.rai.ui.raya.face.RayaFace
 import com.dustincorder.rai.presentation.model.RayaFaceEmotion
 import com.dustincorder.rai.presentation.model.RayaFaceState
 import com.dustincorder.rai.ui.theme.RayaTheme
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private object RayaRoute {
@@ -82,7 +85,6 @@ private object RayaRoute {
     const val Onboarding = "onboarding"
     const val Main = "main"
     const val Settings = "settings"
-    const val History = "history"
 }
 
 @Composable
@@ -100,6 +102,10 @@ fun RayaApp(
     val uiState by rayaViewModel.uiState.collectAsStateWithLifecycle()
     val chatSessions by rayaViewModel.chatSessions.collectAsStateWithLifecycle()
     val activeChatId by rayaViewModel.activeChatId.collectAsStateWithLifecycle()
+    val activeConversation by rayaViewModel.activeConversation.collectAsStateWithLifecycle()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     var onboardingAppearance by remember { mutableStateOf<AppearanceMode?>(null) }
 
     LaunchedEffect(Unit) {
@@ -117,6 +123,33 @@ fun RayaApp(
     }
 
     RayaTheme(appearanceMode = effectiveAppearance(settings.appearanceMode, onboardingAppearance)) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = currentRoute == RayaRoute.Main,
+            drawerContent = {
+                RayaDrawerContent(
+                    sessions = chatSessions,
+                    active = activeConversation,
+                    onNewChat = {
+                        rayaViewModel.createNewChat()
+                        scope.launch { drawerState.close() }
+                    },
+                    onTemporary = {
+                        rayaViewModel.startTemporaryChat()
+                        scope.launch { drawerState.close() }
+                    },
+                    onOpen = { id ->
+                        rayaViewModel.openChat(id)
+                        scope.launch { drawerState.close() }
+                    },
+                    onDelete = rayaViewModel::deleteChat,
+                    onSettings = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate(RayaRoute.Settings)
+                    },
+                )
+            },
+        ) {
         NavHost(navController, startDestination = RayaRoute.Bootstrap) {
             composable(RayaRoute.Bootstrap) { BootstrapScreen() }
             composable(RayaRoute.Onboarding) {
@@ -141,36 +174,29 @@ fun RayaApp(
             composable(RayaRoute.Main) {
                 RayaScreen(
                     state = uiState,
-                    chatId = activeChatId,
+                    activeConversation = activeConversation,
+                    title = activeConversationLabel(
+                        activeConversation,
+                        chatSessions.firstOrNull { it.id == activeChatId }?.title,
+                        stringResource(R.string.new_chat),
+                        stringResource(R.string.temporary_chat),
+                    ),
+                    modelLabel = modelDisplayLabel(settings),
+                    onMenuClick = { scope.launch { drawerState.open() } },
+                    onFaceClick = { },
                     onSubmitText = rayaViewModel::submitText,
                     onVoiceChatClick = onVoiceChatClick,
                     onEndVoiceSession = rayaViewModel::endVoiceSession,
                     onToggleMicrophone = rayaViewModel::toggleMicrophone,
                     onInterruptSpeech = rayaViewModel::interruptSpeech,
-                    onSettingsClick = {
-                        if (uiState.voiceSessionActive) rayaViewModel.endVoiceSession()
-                        navController.navigate(RayaRoute.Settings)
-                    },
                     onClearConversation = rayaViewModel::clearConversation,
-                    onChatHistoryClick = {
-                        if (uiState.voiceSessionActive) rayaViewModel.endVoiceSession()
-                        navController.navigate(RayaRoute.History)
-                    },
-                )
-            }
-            composable(RayaRoute.History) {
-                ChatHistoryScreen(
-                    sessions = chatSessions,
-                    activeId = activeChatId,
-                    onBack = { navController.popBackStack() },
-                    onNewChat = { rayaViewModel.createNewChat(); navController.popBackStack() },
-                    onOpen = { id -> rayaViewModel.openChat(id); navController.popBackStack() },
-                    onDelete = rayaViewModel::deleteChat,
+                    onSaveTemporary = rayaViewModel::saveTemporaryChat,
                 )
             }
             composable(RayaRoute.Settings) {
                 SettingsScreen(settingsViewModel) { navController.popBackStack() }
             }
+        }
         }
     }
 }

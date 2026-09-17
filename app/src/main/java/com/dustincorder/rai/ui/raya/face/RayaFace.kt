@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.tooling.preview.Preview
@@ -39,6 +40,11 @@ import kotlin.random.Random
 
 private val BlushPink = Color(0xFFE66F88)
 private const val EYE_CORNER_FRACTION = 0.24f
+
+enum class RayaFaceRenderMode {
+    Normal,
+    Temporary,
+}
 
 private enum class EyeShape {
     Block,
@@ -84,6 +90,7 @@ private val semanticFaceGallery = listOf(
 fun RayaFace(
     state: RayaFaceState,
     modifier: Modifier = Modifier,
+    renderMode: RayaFaceRenderMode = RayaFaceRenderMode.Normal,
 ) {
     val motion = rememberInfiniteTransition(label = "raya-face-motion")
     val idleDrift by motion.animateFloat(-1f, 1f, infiniteRepeatable(tween(3_600), RepeatMode.Reverse), label = "idle-drift")
@@ -105,6 +112,11 @@ fun RayaFace(
     val gazeX by animateFloatAsState(state.gaze.horizontalOffset, tween(420), label = "gaze-x")
     val gazeY by animateFloatAsState(state.gaze.verticalOffset, tween(420), label = "gaze-y")
     val eyeColor = MaterialTheme.colorScheme.primary
+    val expressionLift by animateFloatAsState(
+        targetValue = if (state.emotion in listOf(RayaFaceEmotion.Happy, RayaFaceEmotion.Excited, RayaFaceEmotion.Playful)) -0.025f else 0f,
+        animationSpec = tween(360),
+        label = "expression-lift",
+    )
     Canvas(
         modifier = modifier
             .aspectRatio(1.15f),
@@ -112,9 +124,10 @@ fun RayaFace(
         drawFace(
             state = state,
             color = eyeColor,
+            renderMode = renderMode,
             blinking = state.blinking || automaticBlink,
             gazeX = gazeX,
-            gazeY = gazeY,
+            gazeY = gazeY + expressionLift,
             idleDrift = idleDrift,
             listeningPulse = listeningPulse,
             thinkingSweep = thinkingSweep,
@@ -141,6 +154,7 @@ private val RayaGaze.verticalOffset: Float
 private fun DrawScope.drawFace(
     state: RayaFaceState,
     color: Color,
+    renderMode: RayaFaceRenderMode,
     blinking: Boolean,
     gazeX: Float,
     gazeY: Float,
@@ -218,8 +232,8 @@ private fun DrawScope.drawFace(
 
     val leftEyeX = width * (0.36f + gazeX) - errorOffset
     val rightEyeX = width * (0.64f + gazeX) + errorOffset
-    drawEye(leftEyeX, eyeY, eyeWidth, eyeHeight, color, leftShape, blinking)
-    drawEye(rightEyeX, eyeY, eyeWidth, eyeHeight, color, rightShape, blinking)
+    drawEye(leftEyeX, eyeY, eyeWidth, eyeHeight, color, leftShape, blinking, renderMode)
+    drawEye(rightEyeX, eyeY, eyeWidth, eyeHeight, color, rightShape, blinking, renderMode)
 
     when (state.emotion) {
         RayaFaceEmotion.Thinking -> drawThinkingDots(width, height, color, thinkingSweep)
@@ -242,6 +256,7 @@ private fun DrawScope.drawEye(
     color: Color,
     shape: EyeShape,
     blinking: Boolean,
+    renderMode: RayaFaceRenderMode,
 ) {
     val closedHeight = size.height * 0.012f
     if (blinking) {
@@ -266,6 +281,7 @@ private fun DrawScope.drawEye(
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(
                 min(rectHeight * EYE_CORNER_FRACTION, rectHeight / 2f),
             ),
+            style = if (renderMode == RayaFaceRenderMode.Temporary) Stroke(size.height * 0.012f) else androidx.compose.ui.graphics.drawscope.Fill,
         )
     }
     fun path(points: List<Pair<Float, Float>>) = Path().apply {
@@ -273,6 +289,7 @@ private fun DrawScope.drawEye(
         points.drop(1).forEach { lineTo(it.first, it.second) }
         close()
     }
+    val pathStyle = if (renderMode == RayaFaceRenderMode.Temporary) Stroke(size.height * 0.012f) else androidx.compose.ui.graphics.drawscope.Fill
     when (shape) {
         EyeShape.Block,
         EyeShape.Open,
@@ -288,7 +305,8 @@ private fun DrawScope.drawEye(
                 right to (y + thick * 0.15f),
                 left to (y + thick * 0.8f),
             )),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.Tired -> roundedRect(x, y, width, thick)
         EyeShape.Chevron -> drawPath(
@@ -300,38 +318,46 @@ private fun DrawScope.drawEye(
                 x to (top + height * 0.32f),
                 (left + width * 0.18f) to bottom,
             )),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.Attention -> drawPath(
             path(listOf(left to (top + thick), (left + width * 0.2f) to top, right to top, right to bottom, left to bottom)),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.Thinking -> roundedRect(x + width * 0.09f, y - height * 0.0f, width * 0.82f, height * 0.4f)
         EyeShape.ConfusedLeft -> roundedRect(x + width * 0.0f, y - height * 0.05f, width * 0.84f, height * 0.62f)
         EyeShape.ConfusedRight -> roundedRect(x + width * 0.0f, y + height * 0.05f, width * 0.84f, height * 0.62f)
         EyeShape.ConcernedLeft -> drawPath(
             path(listOf(left to (top + height * 0.1f), right to top, right to bottom, left to bottom)),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.ConcernedRight -> drawPath(
             path(listOf(left to top, right to (top + height * 0.1f), right to bottom, left to bottom)),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.SadLeft -> drawPath(
             path(listOf(left to (top + height * 0.2f), right to top, right to bottom, left to (bottom - thick))),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.SadRight -> drawPath(
             path(listOf(left to top, right to (top + height * 0.2f), right to (bottom - thick), left to bottom)),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.AngryLeft -> drawPath(
             path(listOf(left to top, right to (top + height * 0.3f), right to bottom, left to (bottom - thick))),
-            color,
+            color = color,
+            style = pathStyle,
         )
         EyeShape.AngryRight -> drawPath(
             path(listOf(left to (top + height * 0.3f), right to top, right to (bottom - thick), left to bottom)),
-            color,
+            color = color,
+            style = pathStyle,
         )
     }
 }
