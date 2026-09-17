@@ -135,10 +135,6 @@ fun RayaApp(
                         rayaViewModel.createNewChat()
                         scope.launch { drawerState.close() }
                     },
-                    onTemporary = {
-                        rayaViewModel.startTemporaryChat()
-                        scope.launch { drawerState.close() }
-                    },
                     onOpen = { id ->
                         rayaViewModel.openChat(id)
                         scope.launch { drawerState.close() }
@@ -187,6 +183,7 @@ fun RayaApp(
                     ),
                     modelLabel = modelDisplayLabel(settings),
                     onMenuClick = { scope.launch { drawerState.open() } },
+                    onTemporaryToggle = rayaViewModel::toggleTemporaryChat,
                     onFaceClick = { },
                     onSubmitText = rayaViewModel::submitText,
                     onVoiceChatClick = onVoiceChatClick,

@@ -122,6 +122,8 @@ class RayaViewModel(
 
     fun startTemporaryChat() = chatCoordinator?.startTemporaryChat()
 
+    fun toggleTemporaryChat() = chatCoordinator?.toggleTemporaryChat()
+
     fun saveTemporaryChat() = chatCoordinator?.saveTemporaryChat()
 
     fun openChat(id: String) = chatCoordinator?.openChat(id)

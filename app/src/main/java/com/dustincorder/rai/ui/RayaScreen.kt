@@ -11,13 +11,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -34,6 +37,8 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MicOff
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -86,6 +91,7 @@ fun RayaScreen(
     title: String,
     modelLabel: String,
     onMenuClick: () -> Unit,
+    onTemporaryToggle: () -> Unit,
     onFaceClick: () -> Unit,
     onSubmitText: (String) -> Unit,
     onVoiceChatClick: () -> Unit,
@@ -104,15 +110,17 @@ fun RayaScreen(
     val emotionPreviewDescription = androidx.compose.ui.res.stringResource(R.string.open_emotion_preview)
 
     Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
+        contentWindowInsets = WindowInsets(0),
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).statusBarsPadding()) {
             RayaIdentityBar(
                 title = title,
                 modelLabel = modelLabel,
                 temporary = temporary,
                 onMenuClick = onMenuClick,
+                onTemporaryToggle = onTemporaryToggle,
+                temporaryToggleEnabled = !state.isBusy && !state.voiceSessionActive,
             )
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 ConversationArea(
@@ -251,13 +259,26 @@ private fun emotionLabel(emotion: RayaFaceEmotion): String = androidx.compose.ui
 )
 
 @Composable
-private fun RayaIdentityBar(title: String, modelLabel: String, temporary: Boolean, onMenuClick: () -> Unit) {
+private fun RayaIdentityBar(
+    title: String,
+    modelLabel: String,
+    temporary: Boolean,
+    onMenuClick: () -> Unit,
+    onTemporaryToggle: () -> Unit,
+    temporaryToggleEnabled: Boolean,
+) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onMenuClick) {
             Icon(Icons.Outlined.Menu, contentDescription = androidx.compose.ui.res.stringResource(R.string.open_menu))
+        }
+        IconButton(onClick = onTemporaryToggle, enabled = temporaryToggleEnabled) {
+            Icon(
+                if (temporary) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                contentDescription = androidx.compose.ui.res.stringResource(if (temporary) R.string.return_to_normal_chat else R.string.start_temporary_chat),
+            )
         }
         Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -422,7 +443,11 @@ private fun RayaBottomDock(
     canClear: Boolean,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f), tonalElevation = 4.dp) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(10.dp)) {
+        Column(
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                .padding(10.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (!state.voiceSessionActive) {
                     OutlinedTextField(
@@ -475,6 +500,7 @@ private fun RayaMainPreview() {
             title = "New chat",
             modelLabel = "Gemini · gemini-2.0-flash",
             onMenuClick = {}, onFaceClick = {}, onSubmitText = {}, onVoiceChatClick = {},
+            onTemporaryToggle = {},
             onEndVoiceSession = {}, onToggleMicrophone = {}, onInterruptSpeech = {},
             onClearConversation = {}, onSaveTemporary = {},
         )
@@ -491,6 +517,7 @@ private fun RayaTemporaryPreview() {
             title = "Temporary chat",
             modelLabel = "Groq · llama",
             onMenuClick = {}, onFaceClick = {}, onSubmitText = {}, onVoiceChatClick = {},
+            onTemporaryToggle = {},
             onEndVoiceSession = {}, onToggleMicrophone = {}, onInterruptSpeech = {},
             onClearConversation = {}, onSaveTemporary = {},
         )

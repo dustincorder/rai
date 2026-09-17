@@ -20,6 +20,7 @@ class ChatSessionCoordinator(
     val sessions: StateFlow<List<ChatSession>> = _sessions
     private val _activeConversation = MutableStateFlow<ActiveConversation>(ActiveConversation.NewDraft)
     val activeConversation: StateFlow<ActiveConversation> = _activeConversation
+    private var temporaryReturnTarget: ActiveConversation? = null
     private val mutationMutex = Mutex()
     private val ready = CompletableDeferred<Unit>()
     private var started = false
@@ -47,13 +48,43 @@ class ChatSessionCoordinator(
             return@launchReady
         }
         if (!conversationOwner.replaceConversation(emptyList())) return@launchReady
+        temporaryReturnTarget = null
         _activeConversation.value = ActiveConversation.NewDraft
     }
 
     fun startTemporaryChat() = launchReady {
-        if (!conversationOwner.canReplaceConversation()) return@launchReady
-        if (!conversationOwner.replaceConversation(emptyList())) return@launchReady
+        enterTemporary()
+    }
+
+    fun toggleTemporaryChat() = launchReady {
+        if (_activeConversation.value is ActiveConversation.Temporary) {
+            restoreTemporaryReturnTarget()
+        } else {
+            enterTemporary()
+        }
+    }
+
+    private suspend fun enterTemporary() {
+        if (_activeConversation.value is ActiveConversation.Temporary) return
+        if (!conversationOwner.canReplaceConversation()) return
+        if (!conversationOwner.replaceConversation(emptyList())) return
+        temporaryReturnTarget = _activeConversation.value
         _activeConversation.value = ActiveConversation.Temporary
+    }
+
+    private suspend fun restoreTemporaryReturnTarget() {
+        if (!conversationOwner.canReplaceConversation()) return
+        val requested = temporaryReturnTarget ?: ActiveConversation.NewDraft
+        val target = when (requested) {
+            is ActiveConversation.Persistent -> if (repository.listSessions().any { it.id == requested.sessionId }) requested else ActiveConversation.NewDraft
+            ActiveConversation.NewDraft -> requested
+            ActiveConversation.Temporary -> ActiveConversation.NewDraft
+        }
+        val messages = (target as? ActiveConversation.Persistent)?.let { repository.loadSession(it.sessionId)?.messages.orEmpty() }.orEmpty()
+        if (!conversationOwner.replaceConversation(messages)) return
+        temporaryReturnTarget = null
+        _activeConversation.value = target
+        _sessions.value = repository.listSessions()
     }
 
     fun saveTemporaryChat() = launchReady {
@@ -64,6 +95,7 @@ class ChatSessionCoordinator(
         val session = repository.createSession()
         repository.saveMessages(session.id, messages)
         _activeConversation.value = ActiveConversation.Persistent(session.id)
+        temporaryReturnTarget = null
         _sessions.value = repository.listSessions()
         if (shouldGenerateChatTitle(session, messages)) {
             repository.markTitleGenerationAttempted(session.id)
@@ -77,6 +109,7 @@ class ChatSessionCoordinator(
         if (repository.listSessions().none { it.id == id }) return@launchReady
         val messages = repository.loadSession(id)?.messages.orEmpty()
         if (!conversationOwner.replaceConversation(messages)) return@launchReady
+        temporaryReturnTarget = null
         _activeConversation.value = ActiveConversation.Persistent(id)
         _sessions.value = repository.listSessions()
     }
@@ -85,6 +118,7 @@ class ChatSessionCoordinator(
         if (!conversationOwner.canReplaceConversation()) return@launchReady
         if (repository.listSessions().none { it.id == id }) return@launchReady
         repository.deleteSession(id)
+        temporaryReturnTarget = null
         var sessions = repository.listSessions()
         if ((_activeConversation.value as? ActiveConversation.Persistent)?.sessionId == id) {
             val next = sessions.firstOrNull()

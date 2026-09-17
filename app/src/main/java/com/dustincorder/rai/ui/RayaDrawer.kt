@@ -15,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Forum
-import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -44,7 +43,6 @@ fun RayaDrawerContent(
     sessions: List<ChatSession>,
     active: ActiveConversation,
     onNewChat: () -> Unit,
-    onTemporary: () -> Unit,
     onOpen: (String) -> Unit,
     onDelete: (String) -> Unit,
     onSettings: () -> Unit,
@@ -61,12 +59,6 @@ fun RayaDrawerContent(
                 selected = active is ActiveConversation.NewDraft,
                 onClick = onNewChat,
                 icon = { Icon(Icons.Outlined.AddComment, null) },
-            )
-            NavigationDrawerItem(
-                label = { Text(stringResource(R.string.temporary_chat)) },
-                selected = active is ActiveConversation.Temporary,
-                onClick = onTemporary,
-                icon = { Icon(Icons.Outlined.VisibilityOff, null) },
             )
             Spacer(Modifier.height(16.dp))
             Text(stringResource(R.string.chat_history), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -111,6 +103,6 @@ private fun RayaDrawerPreview() {
     RayaDrawerContent(
         sessions = listOf(ChatSession("1", "Project planning", createdAt = 1L, updatedAt = 2L)),
         active = ActiveConversation.Persistent("1"),
-        onNewChat = {}, onTemporary = {}, onOpen = {}, onDelete = {}, onSettings = {},
+        onNewChat = {}, onOpen = {}, onDelete = {}, onSettings = {},
     )
 }
