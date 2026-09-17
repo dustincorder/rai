@@ -2,6 +2,11 @@
 
 Read only when `AGENTS.md`'s file map is insufficient. Source is authoritative.
 
+Path convention: same as `AGENTS.md` — Kotlin paths not starting with
+`app/`, `docs/`, or `.github/` are relative to
+`app/src/main/java/com/dustincorder/rai/`; a bare `X.kt` sits directly
+under that base.
+
 ## Startup
 
 - Purpose: DI-light composition root, onboarding routing, theme, navigation.
@@ -10,7 +15,7 @@ Read only when `AGENTS.md`'s file map is insufficient. Source is authoritative.
   (edge-to-edge, permission state, ViewModel wiring), `ui/RayaApp.kt`
   (NavHost: Bootstrap → Onboarding → Main; drawer + Settings routes).
 - State: `OnboardingStore.completed`, persisted settings / configured keys
-  decide the initial destination (`OnboardingPolicies.kt`).
+  decide the initial destination (`data/settings/OnboardingPolicies.kt`).
 - Invariants: no network on startup beyond lazy init; onboarding completion
   is explicit; do not bypass the bootstrap route.
 
@@ -22,9 +27,13 @@ Read only when `AGENTS.md`'s file map is insufficient. Source is authoritative.
   pass-throughs to the orchestrator/coordinator.
 - `presentation/SettingsViewModel.kt`: settings draft save, API-key
   status/write/delete, connection test, model-list refresh.
-- `presentation/RayaUiState.kt` + `RayaStateMapper.kt` (+
+- `presentation/RayaUiState.kt` + `presentation/RayaStateMapper.kt` (+
   `presentation/model/RayaFaceState.kt`): derive face emotion, status
-  strings, busy/speaking flags from orchestrator flows.
+  strings, busy/speaking flags from orchestrator flows. Semantic emotion
+  (`RayaEmotion`) and interaction state (`RayaState`) stay separate;
+  `RayaFaceEmotion` is the render enum — `RayaEmotion.Thinking` maps to
+  `SemanticThinking`, while `RayaState.Thinking/Listening/Error` map to the
+  same-named face values.
 - Invariants: UI never mutates conversation directly; ViewModels expose
   StateFlow + actions only.
 
@@ -96,11 +105,11 @@ Read only when `AGENTS.md`'s file map is insufficient. Source is authoritative.
 ## Settings / keys / models
 
 - Persistence: `data/settings/SettingsRepository.kt` (+ DataStore impl),
-  `AppSettings.kt` (`provider`, protocol/base URL, `resolvedModelId()`,
+  `data/settings/AppSettings.kt` (`provider`, protocol/base URL, `resolvedModelId()`,
   STT/TTS engines, appearance, `customAllowInsecureHttp`).
 - Keys: `data/secrets/ApiKeyStore.kt` (Android impl) — secure storage only,
   never plaintext/logged.
-- Discovery: `data/llm/ModelDiscovery.kt` + `ModelCatalog.kt`/`LlmModels.kt`;
+- Discovery: `data/llm/ModelDiscovery.kt` + `data/llm/ModelCatalog.kt`/`data/llm/LlmModels.kt`;
   `chatModels()` filters to chat-capable models; cached list shown on failure;
   Custom Model escape hatch preserved.
 - UI: `ui/SettingsScreen.kt` IA (Raya, AI, Voice, Appearance, Integrations,
@@ -117,6 +126,9 @@ Read only when `AGENTS.md`'s file map is insufficient. Source is authoritative.
   `app/src/main/assets/silero_vad.onnx`); recognition lifecycle in
   `domain/RecognitionAttemptLifecycle.kt`.
 - Barge-in: `speech/AndroidBargeInMonitor.kt`, orchestrator handoff block.
+  Keeps a 500 ms PCM pre-roll (`maxPreRollSamples = sampleRate / 2` at
+  16 kHz) so confirmed speech handoff includes audio preceding the VAD
+  confirmation.
 - TTS: `speech/AndroidSpeechSynthesisProvider.kt` (production) via
   `speech/RuntimeSpeechSynthesisProvider.kt`; `LocalNeural*` + 
   `SherpaOnnxLocalNeuralTtsEngine` + `TtsModelCatalog` are dormant — do not
@@ -134,8 +146,8 @@ Read only when `AGENTS.md`'s file map is insufficient. Source is authoritative.
   Temporary = outlined, same geometry/motion/accent).
 - Navigation: drawer (`ui/RayaDrawer.kt`) — New Chat, history, bottom
   Settings; header toggle for Temporary; Settings route ends active voice first.
-- Localization: `app/src/main/res/values/strings.xml` + `values-ru/` +
-  `values-uk/` + `xml/locales_config.xml`. All user-visible strings in 3 locales.
+- Localization: `app/src/main/res/values/strings.xml` + `app/src/main/res/values-ru/` +
+  `app/src/main/res/values-uk/` + `app/src/main/res/xml/locales_config.xml`. All user-visible strings in 3 locales.
 
 ## Where to change X
 

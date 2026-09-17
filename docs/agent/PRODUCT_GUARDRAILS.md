@@ -11,13 +11,18 @@ Material remnants, no decorative HUD/glassmorphism excess.
 
 ## States vs emotions (separate dimensions)
 
-- Interaction state (`RayaState`): Idle, Listening, Thinking, Speaking, Error.
-- Semantic emotion (`RayaFaceEmotion`): Calm, Listening, Thinking,
-  SemanticThinking, Happy, Excited, Playful, Curious, Skeptical, Confused,
-  Concerned, Sad, Embarrassed, Surprised, Angry, Annoyed, Tired, Error.
-- Note: `RayaFaceEmotion` has both `Thinking` (interaction-derived) and
-  `SemanticThinking` (content-derived). `RayaStateMapper` owns the mapping.
-  Never build an emotion × state cross-product type.
+- Interaction state (`RayaState` in `domain/RayaState.kt`): Idle,
+  Listening, Thinking, Speaking, Error.
+- Semantic emotion (`RayaEmotion` in `domain/RayaResponse.kt`): Calm,
+  Happy, Excited, Playful, Curious, Thinking, Skeptical, Confused,
+  Concerned, Sad, Embarrassed, Surprised, Angry, Annoyed, Tired.
+- Render enum (`RayaFaceEmotion` in `presentation/model/RayaFaceState.kt`)
+  is presentation only. `RayaStateMapper` owns the mapping:
+  `RayaEmotion.Thinking` → `SemanticThinking`;
+  `RayaState.Thinking` → `Thinking`; `RayaState.Listening` → `Listening`;
+  `RayaState.Error` → `Error`. Listening/Thinking/Error face values are
+  interaction-derived, never semantic LLM emotions.
+- Never build an emotion × state cross-product type.
 
 ## Responses
 

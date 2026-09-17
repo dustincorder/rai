@@ -7,6 +7,13 @@ ViewModel + StateFlow + coroutines. Single app module. EN/RU/UK localized.
 This file is the single source of truth. `docs/agent/*` is on-demand depth.
 If docs conflict with source, source wins — report/fix the stale doc.
 
+## Path convention
+
+Kotlin source paths that do not start with `app/`, `docs/`, or `.github/`
+are relative to `app/src/main/java/com/dustincorder/rai/`. A bare `X.kt`
+sits directly under that base. Paths starting with `app/`, `docs/`, or
+`.github/` are repo-root-relative.
+
 ## Non-negotiable workflow
 
 - NEVER merge a PR. NEVER enable auto-merge. A human merges.
@@ -52,7 +59,7 @@ Avoid as a first action: full-tree `find`, dumping source trees, reading
 | Mic permission | `presentation/MicrophonePermissionPolicy.kt`, `MainActivity.kt` |
 | Tail-follow policy | `ui/ConversationTailPolicy.kt` |
 | Theme / design tokens | `ui/theme/Theme.kt`, `ui/theme/Color.kt`, `ui/designsystem/RayaDesignSystem.kt` |
-| Localization | `app/src/main/res/values/strings.xml`, `values-ru/`, `values-uk/`, `xml/locales_config.xml` |
+| Localization | `app/src/main/res/values/strings.xml`, `app/src/main/res/values-ru/`, `app/src/main/res/values-uk/`, `app/src/main/res/xml/locales_config.xml` |
 | Tests | `app/src/test/java/com/dustincorder/rai/{data,domain,presentation,speech,ui}/` |
 
 ## Ownership
@@ -61,11 +68,18 @@ Avoid as a first action: full-tree `find`, dumping source trees, reading
   UI never owns business state; ViewModels expose state + actions.
 - Keep `domain/` Android-free where practical. Explicit optional
   integrations; no globals/singletons/premature modules.
-- Semantic emotion (`RayaFaceEmotion`: Calm, Listening, Thinking,
-  SemanticThinking, Happy, Excited, Playful, Curious, Skeptical, Confused,
-  Concerned, Sad, Embarrassed, Surprised, Angry, Annoyed, Tired, Error) and
-  runtime state (`RayaState`: Idle, Listening, Thinking, Speaking, Error)
-  are separate dimensions. Never build an emotion × state cross-product type.
+- Semantic emotion (`RayaEmotion` in `domain/RayaResponse.kt`: Calm, Happy,
+  Excited, Playful, Curious, Thinking, Skeptical, Confused, Concerned, Sad,
+  Embarrassed, Surprised, Angry, Annoyed, Tired) and interaction state
+  (`RayaState` in `domain/RayaState.kt`: Idle, Listening, Thinking,
+  Speaking, Error) are separate dimensions. Never build an emotion × state
+  cross-product type.
+- `RayaFaceEmotion` (`presentation/model/RayaFaceState.kt`) is a
+  presentation/render enum, not the domain emotion. `RayaStateMapper` maps:
+  `RayaEmotion.Thinking` → `SemanticThinking`; `RayaState.Thinking` →
+  `Thinking`; `RayaState.Listening` → `Listening`; `RayaState.Error` →
+  `Error`. Listening/Thinking/Error face values are interaction-derived,
+  never LLM semantic emotions.
 
 ## Chat semantics (accepted)
 
@@ -89,15 +103,18 @@ Avoid as a first action: full-tree `find`, dumping source trees, reading
 
 - VAD-gated STT (Sherpa Silero + configurable Whisper/system engine),
   streaming replies, barge-in with epoch guards, inactivity teardown.
+- Barge-in keeps a 500 ms PCM pre-roll (`maxPreRollSamples = sampleRate / 2`
+  at 16 kHz) so confirmed speech handoff includes audio preceding the VAD
+  confirmation.
 - System TTS is production/default. Do NOT resurrect local-neural TTS as a
   product feature; dormant infra (`LocalNeuralSpeechSynthesisProvider`,
   `SherpaOnnxLocalNeuralTtsEngine`) stays unless a new product decision says so.
 - Mic denial: rationale → retryable message; permanent denial → App Settings
   guidance. Active voice ends before Settings navigation.
 
-## UI / provider rules
+## UI product rules
 
-- Task 007 redesign: M3 underneath, Raya identity on top. No generic
+- Current Raya UI direction: M3 underneath, Raya identity on top. No generic
   messenger look. Drawer: New Chat, history, bottom Settings. Header shows
   chat title + resolved model. Face → transcript fade, unified text/voice dock.
 - Settings IA: Raya, AI, Voice, Appearance, Integrations, Privacy &
