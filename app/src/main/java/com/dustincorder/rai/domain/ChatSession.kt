@@ -51,6 +51,7 @@ interface ConversationOwner {
 sealed interface ActiveConversation {
     data object NewDraft : ActiveConversation
     data class Persistent(val sessionId: String) : ActiveConversation
+    data object Temporary : ActiveConversation
 }
 
 fun shouldGenerateChatTitle(session: ChatSession, messages: List<ConversationMessage>): Boolean {
@@ -78,6 +79,7 @@ fun sanitizeChatTitle(raw: String?): String? {
         .removeSuffix("```")
         .trim()
         .replace(Regex("^(#+|[-*])\\s+"), "")
+        .replace(Regex("[*_`]+"), "")
         .trim('"', '\'')
         .take(60)
         .trim()

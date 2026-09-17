@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -286,6 +287,7 @@ class ChatSessionCoordinatorTest {
         assertTrue(session.title!!.length <= 60)
         assertEquals(ChatTitleSource.Derived, session.titleSource)
         assertEquals(before, session.updatedAt)
+        assertEquals(1, generator.calls)
     }
 
     @Test
@@ -304,6 +306,7 @@ class ChatSessionCoordinatorTest {
         val session = repository.listSessions().single()
         assertTrue(session.title!!.startsWith("Please help"))
         assertEquals(ChatTitleSource.Derived, session.titleSource)
+        assertEquals(1, generator.calls)
     }
 
     @Test
@@ -365,6 +368,277 @@ class ChatSessionCoordinatorTest {
         assertTrue(owner.conversation.value.isEmpty())
     }
 
+    @Test
+    fun `temporary chat starts from draft and never enters history`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("private note")))
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.Temporary, coordinator.activeConversation.value)
+        assertTrue(repository.listSessions().isEmpty())
+        assertEquals("private note", owner.conversation.value.single().text)
+    }
+
+    @Test
+    fun `temporary chat replaces persistent chat and switching discards it`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val persistent = repository.createSession()
+        repository.saveMessages(persistent.id, listOf(user("saved")))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("private")))
+        advanceUntilIdle()
+        coordinator.openChat(persistent.id)
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.Persistent(persistent.id), coordinator.activeConversation.value)
+        assertEquals("saved", owner.conversation.value.single().text)
+        assertEquals(listOf(persistent.id), repository.listSessions().map { it.id })
+    }
+
+    @Test
+    fun `temporary chat can be saved exactly once with complete transcript`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        val transcript = listOf(user("private"), assistant("answer"))
+        owner.set(transcript)
+        advanceUntilIdle()
+
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        val sessions = repository.listSessions()
+        assertEquals(1, sessions.size)
+        assertEquals(ActiveConversation.Persistent(sessions.single().id), coordinator.activeConversation.value)
+        assertEquals(transcript, repository.loadSession(sessions.single().id)?.messages)
+    }
+
+    @Test
+    fun `saving eligible temporary chat marks one title attempt before launch`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = "Saved title")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(eligibleMessages())
+        advanceUntilIdle()
+
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        assertTrue(repository.listSessions().single().titleGenerationAttempted)
+        assertEquals(1, generator.calls)
+        generator.release()
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `saved temporary title request is not repeated after another message`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = "Saved title")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(eligibleMessages())
+        advanceUntilIdle()
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        owner.set(eligibleMessages() + user("A later message"))
+        advanceUntilIdle()
+
+        assertEquals(1, generator.calls)
+        generator.release()
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `ineligible saved temporary chat starts one attempt when later eligible`() = runTest {
+        val owner = FakeConversationOwner()
+        val generator = ControlledTitleGenerator(result = "Later title")
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner, generator)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("short initial")))
+        advanceUntilIdle()
+        coordinator.saveTemporaryChat()
+        advanceUntilIdle()
+
+        assertFalse(repository.listSessions().single().titleGenerationAttempted)
+        assertEquals(0, generator.calls)
+        owner.set(listOf(user("short initial"), assistant("answer")))
+        advanceUntilIdle()
+
+        assertEquals(1, generator.calls)
+        assertTrue(repository.listSessions().single().titleGenerationAttempted)
+        generator.release()
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `temporary chat can switch to new draft without history entry`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("private")))
+        advanceUntilIdle()
+
+        coordinator.createNewChat()
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+        assertTrue(repository.listSessions().isEmpty())
+        assertTrue(owner.conversation.value.isEmpty())
+    }
+
+    @Test
+    fun `persistent chat returns after temporary toggle`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val persistent = repository.createSession()
+        repository.saveMessages(persistent.id, listOf(user("normal")))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.openChat(persistent.id)
+        advanceUntilIdle()
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("private")))
+        advanceUntilIdle()
+
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.Persistent(persistent.id), coordinator.activeConversation.value)
+        assertEquals("normal", owner.conversation.value.single().text)
+        assertEquals("normal", repository.loadSession(persistent.id)?.messages?.single()?.text)
+    }
+
+    @Test
+    fun `new draft returns after temporary toggle`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("private")))
+        advanceUntilIdle()
+
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+        assertTrue(owner.conversation.value.isEmpty())
+        assertTrue(repository.listSessions().isEmpty())
+    }
+
+    @Test
+    fun `missing temporary return session falls back to new draft`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val persistent = repository.createSession()
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.openChat(persistent.id)
+        advanceUntilIdle()
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+        repository.deleteSession(persistent.id)
+
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.NewDraft, coordinator.activeConversation.value)
+        assertTrue(owner.conversation.value.isEmpty())
+    }
+
+    @Test
+    fun `explicit persistent open clears temporary return target`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val first = repository.createSession()
+        repository.saveMessages(first.id, listOf(user("first")))
+        val second = repository.createSession()
+        repository.saveMessages(second.id, listOf(user("second")))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.openChat(first.id)
+        advanceUntilIdle()
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+        coordinator.openChat(second.id)
+        advanceUntilIdle()
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.Temporary, coordinator.activeConversation.value)
+        owner.set(listOf(user("temporary again")))
+        advanceUntilIdle()
+        coordinator.toggleTemporaryChat()
+        advanceUntilIdle()
+        assertEquals(ActiveConversation.Persistent(second.id), coordinator.activeConversation.value)
+        assertEquals("second", owner.conversation.value.single().text)
+    }
+
+    @Test
+    fun `reconstructed coordinator cannot restore temporary mode`() = runTest {
+        val owner = FakeConversationOwner()
+        val repository = repository(UnconfinedTestDispatcher(testScheduler))
+        val coordinator = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, owner)
+        coordinator.start()
+        advanceUntilIdle()
+        coordinator.startTemporaryChat()
+        advanceUntilIdle()
+        owner.set(listOf(user("gone after process death")))
+        advanceUntilIdle()
+
+        val restoredOwner = FakeConversationOwner()
+        val restored = ChatSessionCoordinator(coordinatorScope(backgroundScope, testScheduler), repository, restoredOwner)
+        restored.start()
+        advanceUntilIdle()
+
+        assertEquals(ActiveConversation.NewDraft, restored.activeConversation.value)
+        assertTrue(restoredOwner.conversation.value.isEmpty())
+        assertTrue(repository.listSessions().isEmpty())
+    }
+
     private fun repository(dispatcher: kotlinx.coroutines.CoroutineDispatcher): FileChatSessionRepository =
         FileChatSessionRepository(root, ioDispatcher = dispatcher)
 
@@ -406,6 +680,7 @@ class ChatSessionCoordinatorTest {
     )
 
     private fun user(text: String) = ConversationMessage(ConversationRole.User, text)
+    private fun assistant(text: String) = ConversationMessage(ConversationRole.Assistant, text)
 
     private fun ChatSessionCoordinator.persistentId() =
         (activeConversation.value as ActiveConversation.Persistent).sessionId
