@@ -290,6 +290,15 @@ class RayaOrchestrator(
         _lastResponseLanguageTag.value = null
     }
 
+    fun replaceConversation(messages: List<ConversationMessage>) {
+        if (_voiceSessionActive.value || textTurnInFlight) return
+        _conversation.value = messages
+        _semanticEmotion.value = RayaEmotion.Calm
+        _lastResponseLanguageTag.value = null
+        _streamingText.value = ""
+        _state.value = RayaState.Idle
+    }
+
     fun close() {
         endVoiceSessionInternal(notice = false, reason = "agentClose")
         speechRecognition.release()

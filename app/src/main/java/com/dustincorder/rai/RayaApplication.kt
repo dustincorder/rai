@@ -7,6 +7,7 @@ import com.dustincorder.rai.data.llm.DefaultLlmModelDiscovery
 import com.dustincorder.rai.data.llm.GeminiReplyProvider
 import com.dustincorder.rai.data.llm.OpenAiCompatibleReplyProvider
 import com.dustincorder.rai.data.llm.rayaSystemPrompt
+import com.dustincorder.rai.data.chat.FileChatSessionRepository
 import com.dustincorder.rai.data.secrets.AndroidApiKeyStore
 import com.dustincorder.rai.data.settings.DataStoreSettingsRepository
 import com.dustincorder.rai.data.settings.OnboardingStore
@@ -32,6 +33,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 class RayaApplication : Application() {
+    val chatRepository by lazy { FileChatSessionRepository(java.io.File(filesDir, "chats")) }
     val onboardingStore by lazy { OnboardingStore(this) }
     val bargeInMonitor by lazy { AndroidBargeInMonitor(this, ::debugVoice) }
     val settingsRepository by lazy { DataStoreSettingsRepository(this) }

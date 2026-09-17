@@ -6,6 +6,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dustincorder.rai.BuildConfig
 import com.dustincorder.rai.RayaApplication
+import com.dustincorder.rai.domain.ChatSession
+import com.dustincorder.rai.domain.ChatSessionRepository
+import com.dustincorder.rai.domain.ChatTitleGenerator
+import com.dustincorder.rai.domain.shouldGenerateChatTitle
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.BargeInMonitor
 import com.dustincorder.rai.domain.InteractionMode
@@ -22,13 +26,20 @@ import com.dustincorder.rai.speech.AndroidSpeechSynthesisProvider
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class RayaViewModel(
     speechRecognition: SpeechRecognitionProvider,
     speechSynthesis: SpeechSynthesisProvider,
     replyProvider: ReplyProvider,
     bargeInMonitor: BargeInMonitor? = null,
+    private val chatRepository: ChatSessionRepository? = null,
+    private val titleGenerator: ChatTitleGenerator? = null,
     routingDiagnostics: RayaRoutingDiagnostics = RayaRoutingDiagnostics { _, _, _ -> },
     voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
 ) : ViewModel() {
@@ -41,6 +52,53 @@ class RayaViewModel(
         routingDiagnostics = routingDiagnostics,
         voiceDiagnostics = voiceDiagnostics,
     )
+
+    private val _chatSessions = kotlinx.coroutines.flow.MutableStateFlow<List<ChatSession>>(emptyList())
+    val chatSessions: StateFlow<List<ChatSession>> = _chatSessions
+    private val _activeChatId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val activeChatId: StateFlow<String?> = _activeChatId
+    private val chatMutex = Mutex()
+
+    init {
+        chatRepository?.let { repository ->
+            viewModelScope.launch {
+                val existing = repository.sessions.first()
+                _chatSessions.value = existing
+                val active = existing.firstOrNull() ?: repository.createSession().also {
+                    _chatSessions.value = repository.sessions.first()
+                }
+                _activeChatId.value = active.id
+                repository.loadSession(active.id)?.let { orchestrator.replaceConversation(it.messages) }
+                orchestrator.conversation.collect { messages ->
+                    var titleRequest: Pair<String, List<ConversationMessage>>? = null
+                    chatMutex.withLock {
+                        val id = _activeChatId.value
+                        if (id != null) {
+                            repository.saveMessages(id, messages)
+                            _chatSessions.value = repository.sessions.first()
+                            val session = _chatSessions.value.firstOrNull { it.id == id }
+                            if (titleGenerator != null && session != null && shouldGenerateChatTitle(session, messages)) {
+                                repository.markTitleGenerationAttempted(id)
+                                _chatSessions.value = repository.sessions.first()
+                                titleRequest = id to messages
+                            }
+                        }
+                    }
+                    titleRequest?.let { (id, snapshot) ->
+                        val generator = titleGenerator ?: return@let
+                        viewModelScope.launch {
+                            runCatching { generator.generate(snapshot) }.getOrNull()?.let { title ->
+                                chatMutex.withLock {
+                                    repository.updateTitle(id, title, com.dustincorder.rai.domain.ChatTitleSource.Generated)
+                                    _chatSessions.value = repository.sessions.first()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     val uiState: StateFlow<RayaUiState> = combine(
         combine(
@@ -97,6 +155,48 @@ class RayaViewModel(
     fun clearConversation() = orchestrator.clearConversation()
     fun showError(message: String) = orchestrator.reportError(message)
 
+    fun createNewChat() {
+        val repository = chatRepository ?: return
+        viewModelScope.launch {
+            chatMutex.withLock {
+                val session = repository.createSession()
+                _activeChatId.value = session.id
+                _chatSessions.value = repository.sessions.first()
+                orchestrator.replaceConversation(emptyList())
+            }
+        }
+    }
+
+    fun openChat(id: String) {
+        val repository = chatRepository ?: return
+        viewModelScope.launch {
+            chatMutex.withLock {
+                if (repository.sessions.first().none { it.id == id }) return@withLock
+                val messages = repository.loadSession(id)?.messages.orEmpty()
+                _activeChatId.value = id
+                _chatSessions.value = repository.sessions.first()
+                orchestrator.replaceConversation(messages)
+            }
+        }
+    }
+
+    fun deleteChat(id: String) {
+        val repository = chatRepository ?: return
+        viewModelScope.launch {
+            chatMutex.withLock {
+                repository.deleteSession(id)
+                var sessions = repository.sessions.first()
+                val next = if (_activeChatId.value == id) sessions.firstOrNull() ?: repository.createSession() else null
+                sessions = repository.sessions.first()
+                _chatSessions.value = sessions
+                if (next != null) {
+                    _activeChatId.value = next.id
+                    orchestrator.replaceConversation(repository.loadSession(next.id)?.messages.orEmpty())
+                }
+            }
+        }
+    }
+
     override fun onCleared() {
         orchestrator.close()
         super.onCleared()
@@ -111,6 +211,8 @@ class RayaViewModelFactory(private val application: RayaApplication) : ViewModel
             speechRecognition = application.runtimeSpeechRecognitionProvider(),
             speechSynthesis = application.runtimeSpeechSynthesisProvider(),
             bargeInMonitor = application.bargeInMonitor,
+            chatRepository = application.chatRepository,
+            titleGenerator = application.replyProvider,
             replyProvider = application.replyProvider,
             routingDiagnostics = AndroidRayaRoutingDiagnostics(),
             voiceDiagnostics = AndroidRayaVoiceDiagnostics(),

@@ -9,6 +9,7 @@ import com.dustincorder.rai.data.settings.SettingsRepository
 import com.dustincorder.rai.data.settings.normalizeBaseUrl
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.ConversationRole
+import com.dustincorder.rai.domain.ChatTitleGenerator
 import com.dustincorder.rai.domain.RayaResponse
 import com.dustincorder.rai.domain.ReplyEvent
 import com.dustincorder.rai.domain.ReplyProvider
@@ -28,7 +29,7 @@ class ConfigurableReplyProvider(
     private val gemini: GeminiReplyProvider,
     private val systemPrompt: () -> String,
     private val json: Json = Json { ignoreUnknownKeys = true },
-) : ReplyProvider {
+) : ReplyProvider, ChatTitleGenerator {
     override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse {
         if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
         val settings = settingsRepository.settings.first()
@@ -59,6 +60,24 @@ class ConfigurableReplyProvider(
             logDiagnostics(failure, config)
             throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
         }
+    }
+
+    override suspend fun generate(messages: List<ConversationMessage>): String? {
+        if (messages.isEmpty()) return null
+        val settings = settingsRepository.settings.first()
+        requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
+        val apiKey = apiKeyStore.read(settings.provider)
+        val modelId = settings.resolvedModelId()
+        if (modelId.isBlank() || settings.baseUrl.isBlank() ||
+            (settings.provider.requiresApiKey && apiKey.isNullOrBlank())
+        ) return null
+        val prompt = "Generate a short neutral title for this conversation. Return only the title, no quotes, markdown, or explanation."
+        val raw = when (settings.protocol) {
+            LlmProtocol.OpenAiCompatible -> openAi.reply(settings.baseUrl, modelId, apiKey, prompt, messages.take(6))
+            LlmProtocol.AnthropicCompatible -> anthropic.reply(settings.baseUrl, modelId, apiKey, prompt, messages.take(6))
+            LlmProtocol.Gemini -> gemini.reply(settings.baseUrl, modelId, apiKey, prompt, messages.take(6))
+        }
+        return raw.replace(Regex("\\s+"), " ").trim().trim('"', '\'').take(60).takeIf { it.isNotBlank() }
     }
 
     override fun streamReply(
