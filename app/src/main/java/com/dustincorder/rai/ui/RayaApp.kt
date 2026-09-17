@@ -107,6 +107,7 @@ fun RayaApp(
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     var onboardingAppearance by remember { mutableStateOf<AppearanceMode?>(null) }
+    var settingsAppearance by remember { mutableStateOf<AppearanceMode?>(null) }
 
     LaunchedEffect(Unit) {
         val destination = when (resolveInitialDestination(application.onboardingStore.completed) {
@@ -122,7 +123,7 @@ fun RayaApp(
         }
     }
 
-    RayaTheme(appearanceMode = effectiveAppearance(settings.appearanceMode, onboardingAppearance)) {
+    RayaTheme(appearanceMode = effectiveAppearance(settings.appearanceMode, onboardingAppearance ?: settingsAppearance)) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             gesturesEnabled = currentRoute == RayaRoute.Main,
@@ -144,6 +145,9 @@ fun RayaApp(
                     },
                     onDelete = rayaViewModel::deleteChat,
                     onSettings = {
+                        if (settingsNavigationAction(uiState.voiceSessionActive) == SettingsNavigationAction.EndVoiceThenOpen) {
+                            rayaViewModel.endVoiceSession()
+                        }
                         scope.launch { drawerState.close() }
                         navController.navigate(RayaRoute.Settings)
                     },
@@ -194,7 +198,14 @@ fun RayaApp(
                 )
             }
             composable(RayaRoute.Settings) {
-                SettingsScreen(settingsViewModel) { navController.popBackStack() }
+                SettingsScreen(
+                    viewModel = settingsViewModel,
+                    onAppearancePreview = { settingsAppearance = it },
+                    onBack = {
+                        settingsAppearance = null
+                        navController.popBackStack()
+                    },
+                )
             }
         }
         }

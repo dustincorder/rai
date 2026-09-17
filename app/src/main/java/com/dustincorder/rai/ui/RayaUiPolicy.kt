@@ -5,6 +5,11 @@ import com.dustincorder.rai.data.settings.LlmProviderPreset
 import com.dustincorder.rai.domain.ActiveConversation
 import com.dustincorder.rai.ui.raya.face.RayaFaceRenderMode
 
+enum class SettingsNavigationAction {
+    Open,
+    EndVoiceThenOpen,
+}
+
 fun activeConversationLabel(active: ActiveConversation, title: String?, newChat: String, temporary: String): String = when (active) {
     ActiveConversation.NewDraft -> newChat
     ActiveConversation.Temporary -> temporary
@@ -24,3 +29,6 @@ fun modelDisplayLabel(settings: AppSettings): String {
 
 fun faceRenderMode(active: ActiveConversation): RayaFaceRenderMode =
     if (active is ActiveConversation.Temporary) RayaFaceRenderMode.Temporary else RayaFaceRenderMode.Normal
+
+fun settingsNavigationAction(voiceSessionActive: Boolean): SettingsNavigationAction =
+    if (voiceSessionActive) SettingsNavigationAction.EndVoiceThenOpen else SettingsNavigationAction.Open

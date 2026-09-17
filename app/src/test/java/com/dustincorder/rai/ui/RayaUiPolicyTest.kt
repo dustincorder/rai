@@ -25,4 +25,10 @@ class RayaUiPolicyTest {
         assertEquals(RayaFaceRenderMode.Temporary, faceRenderMode(ActiveConversation.Temporary))
         assertEquals(RayaFaceRenderMode.Normal, faceRenderMode(ActiveConversation.NewDraft))
     }
+
+    @Test
+    fun `settings navigation ends active voice before opening`() {
+        assertEquals(SettingsNavigationAction.EndVoiceThenOpen, settingsNavigationAction(true))
+        assertEquals(SettingsNavigationAction.Open, settingsNavigationAction(false))
+    }
 }

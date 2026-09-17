@@ -259,12 +259,14 @@ private fun DrawScope.drawEye(
     renderMode: RayaFaceRenderMode,
 ) {
     val closedHeight = size.height * 0.012f
+    val eyeStyle = if (renderMode == RayaFaceRenderMode.Temporary) Stroke(size.height * 0.012f) else androidx.compose.ui.graphics.drawscope.Fill
     if (blinking) {
         drawRoundRect(
             color = color,
             topLeft = point(x - width / 2f, y - closedHeight / 2f),
             size = dimensions(width, closedHeight),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(closedHeight / 2f),
+            style = eyeStyle,
         )
         return
     }
@@ -281,7 +283,7 @@ private fun DrawScope.drawEye(
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(
                 min(rectHeight * EYE_CORNER_FRACTION, rectHeight / 2f),
             ),
-            style = if (renderMode == RayaFaceRenderMode.Temporary) Stroke(size.height * 0.012f) else androidx.compose.ui.graphics.drawscope.Fill,
+            style = eyeStyle,
         )
     }
     fun path(points: List<Pair<Float, Float>>) = Path().apply {
@@ -289,7 +291,7 @@ private fun DrawScope.drawEye(
         points.drop(1).forEach { lineTo(it.first, it.second) }
         close()
     }
-    val pathStyle = if (renderMode == RayaFaceRenderMode.Temporary) Stroke(size.height * 0.012f) else androidx.compose.ui.graphics.drawscope.Fill
+    val pathStyle = eyeStyle
     when (shape) {
         EyeShape.Block,
         EyeShape.Open,

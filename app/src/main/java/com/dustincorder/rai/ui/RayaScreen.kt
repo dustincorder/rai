@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,6 +47,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -55,6 +57,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -94,6 +98,7 @@ fun RayaScreen(
     var draft by remember { mutableStateOf("") }
     var showClearDialog by remember { mutableStateOf(false) }
     var showEmotionSheet by remember { mutableStateOf(false) }
+    var identityZoneHeightPx by remember { mutableIntStateOf(0) }
     val canClear = state.conversation.isNotEmpty() && !state.isBusy
     val temporary = activeConversation is ActiveConversation.Temporary
     val emotionPreviewDescription = androidx.compose.ui.res.stringResource(R.string.open_emotion_preview)
@@ -113,12 +118,14 @@ fun RayaScreen(
                 ConversationArea(
                     state = state,
                     chatKey = activeConversation,
+                    transcriptTopInset = with(LocalDensity.current) { identityZoneHeightPx.toDp() },
                     modifier = Modifier.fillMaxSize(),
                 )
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
+                        .onGloballyPositioned { identityZoneHeightPx = it.size.height }
                         .background(MaterialTheme.colorScheme.background.copy(alpha = 0.96f)),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -275,7 +282,12 @@ private data class StreamingAssistant(val text: String)
 private object ThinkingIndicator
 
 @Composable
-private fun ConversationArea(state: RayaUiState, chatKey: ActiveConversation, modifier: Modifier) {
+private fun ConversationArea(
+    state: RayaUiState,
+    chatKey: ActiveConversation,
+    transcriptTopInset: androidx.compose.ui.unit.Dp,
+    modifier: Modifier,
+) {
     val listState = rememberLazyListState()
     val messages = state.conversation
     val thinking = state.face.emotion == RayaFaceEmotion.Thinking
@@ -294,6 +306,13 @@ private fun ConversationArea(state: RayaUiState, chatKey: ActiveConversation, mo
             val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             total to (total == 0 || last >= total - 2)
         }.collect { (total, atBottom) -> tailPolicy = tailPolicy.onViewportSample(total, itemCount, atBottom) }
+    }
+    LaunchedEffect(listState.interactionSource) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) {
+                tailPolicy = tailPolicy.onManualScroll()
+            }
+        }
     }
     LaunchedEffect(state.userTurnRevision) {
         val next = tailPolicy.onUserTurnRevision(state.userTurnRevision)
@@ -319,7 +338,7 @@ private fun ConversationArea(state: RayaUiState, chatKey: ActiveConversation, mo
         state = listState,
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(18.dp),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 230.dp, bottom = 20.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = transcriptTopInset + 12.dp, bottom = 20.dp),
     ) {
         itemsIndexed(items) { _, item ->
             when (item) {
