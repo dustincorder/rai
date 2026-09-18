@@ -264,9 +264,9 @@ class ToolTurnRunner(
             ToolTurnError.ModelError("Инструмент '${pending.call.toolName}' не найден в реестре.")
         )
 
-        if (tool.definition.id != pending.definition.id ||
-            tool.definition.name != pending.call.toolName ||
-            tool.definition.executionKind != pending.definition.executionKind ||
+        val exposed = pending.exposedTools.firstOrNull { it.name == pending.call.toolName }
+        if (tool.definition != pending.definition ||
+            (exposed != null && tool.definition != exposed) ||
             !pending.token.isValidFor(
                 tool.definition.id,
                 tool.definition.executionKind,
@@ -504,6 +504,17 @@ class ToolTurnRunner(
             val errorResult = ToolResult.Error(
                 ToolErrorKind.PolicyDenied,
                 "Инструмент '${call.toolName}' не найден в реестре."
+            )
+            val projected = projector.project(errorResult, budget.maxResultBytes)
+            return CallProcessOutcome.Feedback(
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
+            )
+        }
+
+        if (tool.definition != exposed) {
+            val errorResult = ToolResult.Error(
+                ToolErrorKind.PolicyDenied,
+                "Определение инструмента '${call.toolName}' изменилось после экспозиции в этом раунде."
             )
             val projected = projector.project(errorResult, budget.maxResultBytes)
             return CallProcessOutcome.Feedback(

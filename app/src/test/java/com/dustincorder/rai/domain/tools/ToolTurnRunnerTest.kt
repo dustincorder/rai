@@ -60,6 +60,7 @@ class ToolTurnRunnerTest {
     private class ScriptedModelInvoker(
         private val rounds: List<List<ModelRoundStreamEvent>>,
         private val exposedFilter: ((List<ToolDefinition>) -> List<ToolDefinition>)? = { it },
+        private val onAfterExposedTools: (suspend () -> Unit)? = null,
     ) : ModelTurnInvoker {
         var invocationCount = 0
         val historySteps = mutableListOf<List<ModelRoundStep>>()
@@ -76,6 +77,7 @@ class ToolTurnRunnerTest {
                 val exposed = exposedFilter.invoke(candidateTools)
                 exposedToolsSeen.add(exposed)
                 emit(ModelRoundStreamEvent.ExposedTools(exposed))
+                onAfterExposedTools?.invoke()
             }
             if (invocationCount >= rounds.size) {
                 error("No scripted response for round $invocationCount")
@@ -1676,5 +1678,121 @@ class ToolTurnRunnerTest {
         assertTrue(store.markConsumed("token_3", 30_000L))
         assertEquals(1, store.size())
         assertTrue(store.isConsumed("token_3"))
+    }
+
+    @Test
+    fun `replacing tool definition in registry after exposedTools fails closed and denies execution`() = runTest {
+        val toolA = FakeTool(
+            ToolDefinition(
+                id = ToolId("tool_x"),
+                name = "tool_x",
+                description = "Tool A description",
+                effect = ToolEffect.ReadOnly,
+                executionKind = ExecutionKind.LocalApi,
+                inputSchema = simpleSchema,
+            ),
+        )
+        val toolB = FakeTool(
+            ToolDefinition(
+                id = ToolId("tool_x"),
+                name = "tool_x",
+                description = "Tool B with changed effect and schema",
+                effect = ToolEffect.Destructive,
+                executionKind = ExecutionKind.Network,
+                inputSchema = buildJsonObject { put("type", "object") },
+            ),
+        )
+        val registry = InMemoryToolRegistry(listOf(toolA))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "tool_x", buildJsonObject { put("param", "val") })))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+            onAfterExposedTools = {
+                registry.register(toolB)
+            },
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Completed)
+        assertEquals(0, toolA.callCount)
+        assertEquals(0, toolB.callCount)
+
+        val secondRoundSteps = invoker.historySteps[1]
+        val feedback = secondRoundSteps[1] as ModelRoundStep.ToolExecutionFeedback
+        assertEquals("tool_x", feedback.toolName)
+        val errorKind = feedback.result["error_kind"]?.jsonPrimitive?.content
+        assertEquals(ToolErrorKind.PolicyDenied.name, errorKind)
+        assertTrue(feedback.result["message"]?.jsonPrimitive?.content?.contains("изменилось после экспозиции") == true)
+    }
+
+    @Test
+    fun `remaining calls in resumed batch fail closed if tool definition changed after round exposure`() = runTest {
+        val toolConfirm = FakeTool(
+            ToolDefinition(ToolId("del"), "del", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val toolA = FakeTool(
+            ToolDefinition(ToolId("read_op"), "read_op", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val toolBModified = FakeTool(
+            ToolDefinition(ToolId("read_op"), "read_op", "changed desc", ToolEffect.ExternalWrite, ExecutionKind.Network, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(toolConfirm, toolA))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("c1", "del", buildJsonObject { put("param", "1") }),
+                            ToolCall("c2", "read_op", buildJsonObject { put("param", "2") }),
+                        ),
+                    ),
+                ),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+        )
+
+        val turn1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run batch")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(turn1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        // Before resuming, replace read_op in registry
+        registry.register(toolBModified)
+
+        val resume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run batch")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+
+        assertTrue(resume is ToolTurnResult.Completed)
+        assertEquals(1, toolConfirm.callCount) // Confirmed tool executed
+        assertEquals(0, toolA.callCount)
+        assertEquals(0, toolBModified.callCount) // Modified remaining tool was NOT executed
+
+        val secondRoundSteps = invoker.historySteps[1]
+        val feedbackForRead = secondRoundSteps.filterIsInstance<ModelRoundStep.ToolExecutionFeedback>()
+            .firstOrNull { it.toolName == "read_op" }
+        assertNotNull(feedbackForRead)
+        assertEquals(ToolErrorKind.PolicyDenied.name, feedbackForRead?.result?.get("error_kind")?.jsonPrimitive?.content)
+        assertTrue(feedbackForRead?.result?.get("message")?.jsonPrimitive?.content?.contains("изменилось после экспозиции") == true)
     }
 }
