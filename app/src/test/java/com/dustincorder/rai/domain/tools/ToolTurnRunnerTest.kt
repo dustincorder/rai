@@ -65,16 +65,16 @@ class ToolTurnRunnerTest {
         val historySteps = mutableListOf<List<ModelRoundStep>>()
         val exposedToolsSeen = mutableListOf<List<ToolDefinition>>()
 
-        override fun filterExposedTools(tools: List<ToolDefinition>): List<ToolDefinition> = exposedFilter(tools)
-
         override fun streamRound(
             messages: List<ConversationMessage>,
-            exposedTools: List<ToolDefinition>,
+            candidateTools: List<ToolDefinition>,
             steps: List<ModelRoundStep>,
             languageTag: String?,
         ): Flow<ModelRoundStreamEvent> = flow {
             historySteps.add(steps.toList())
-            exposedToolsSeen.add(exposedTools.toList())
+            val exposed = exposedFilter(candidateTools)
+            exposedToolsSeen.add(exposed)
+            emit(ModelRoundStreamEvent.ExposedTools(exposed))
             if (invocationCount >= rounds.size) {
                 error("No scripted response for round $invocationCount")
             }
@@ -492,7 +492,7 @@ class ToolTurnRunnerTest {
         val invoker = object : ModelTurnInvoker {
             override fun streamRound(
                 messages: List<ConversationMessage>,
-                exposedTools: List<ToolDefinition>,
+                candidateTools: List<ToolDefinition>,
                 steps: List<ModelRoundStep>,
                 languageTag: String?,
             ): Flow<ModelRoundStreamEvent> = flow {
@@ -552,7 +552,7 @@ class ToolTurnRunnerTest {
 
         val token = confirmation.pending.token
         assertNotNull(token)
-        assertTrue(token.isValidFor(ToolId("delete_file"), args, 1, System.currentTimeMillis()))
+        assertTrue(token.isValidFor(ToolId("delete_file"), ExecutionKind.LocalApi, args, 1, 0L))
     }
 
     @Test
@@ -844,12 +844,13 @@ class ToolTurnRunnerTest {
 
         val tokenForOriginal = ActionConfirmationToken(
             toolId = ToolId("delete_file"),
+            executionKind = ExecutionKind.LocalApi,
             canonicalArgumentsHash = computeCanonicalArgumentsHash(originalArgs),
             turnEpoch = 1,
-            expiresAtMs = System.currentTimeMillis() + 60_000L,
+            expiresAtMs = 60_000L,
         )
 
-        assertFalse(tokenForOriginal.isValidFor(ToolId("delete_file"), tamperedArgs, 1, System.currentTimeMillis()))
+        assertFalse(tokenForOriginal.isValidFor(ToolId("delete_file"), ExecutionKind.LocalApi, tamperedArgs, 1, 0L))
 
         val pending = PendingToolConfirmation(
             token = tokenForOriginal,
@@ -1081,12 +1082,13 @@ class ToolTurnRunnerTest {
         val args = buildJsonObject { put("param", "test") }
         val expiredToken = ActionConfirmationToken(
             toolId = ToolId("tool_1"),
+            executionKind = ExecutionKind.LocalApi,
             canonicalArgumentsHash = computeCanonicalArgumentsHash(args),
             turnEpoch = 1,
             expiresAtMs = 1000L,
         )
 
-        assertFalse(expiredToken.isValidFor(ToolId("tool_1"), args, 1, nowMs = 2000L))
+        assertFalse(expiredToken.isValidFor(ToolId("tool_1"), ExecutionKind.LocalApi, args, 1, nowMonotonicMs = 2000L))
     }
 
     @Test
@@ -1094,11 +1096,185 @@ class ToolTurnRunnerTest {
         val args = buildJsonObject { put("param", "test") }
         val token = ActionConfirmationToken(
             toolId = ToolId("tool_1"),
+            executionKind = ExecutionKind.LocalApi,
             canonicalArgumentsHash = computeCanonicalArgumentsHash(args),
             turnEpoch = 1,
-            expiresAtMs = System.currentTimeMillis() + 60_000L,
+            expiresAtMs = 60_000L,
         )
 
-        assertFalse(token.isValidFor(ToolId("tool_1"), args, currentTurnEpoch = 2, nowMs = System.currentTimeMillis()))
+        assertFalse(token.isValidFor(ToolId("tool_1"), ExecutionKind.LocalApi, args, currentTurnEpoch = 2, nowMonotonicMs = 1000L))
+    }
+
+    @Test
+    fun `confirmation token with mismatched execution kind is rejected`() {
+        val args = buildJsonObject { put("param", "test") }
+        val token = ActionConfirmationToken(
+            toolId = ToolId("tool_1"),
+            executionKind = ExecutionKind.LocalApi,
+            canonicalArgumentsHash = computeCanonicalArgumentsHash(args),
+            turnEpoch = 1,
+            expiresAtMs = 60_000L,
+        )
+
+        assertFalse(token.isValidFor(ToolId("tool_1"), ExecutionKind.RemoteMcp("test-server"), args, currentTurnEpoch = 1, nowMonotonicMs = 1000L))
+    }
+
+    @Test
+    fun `tool definition changed before confirmation approval fails closed`() = runTest {
+        val originalDef = ToolDefinition(
+            id = ToolId("modify_system"),
+            name = "modify",
+            description = "Original modify tool",
+            effect = ToolEffect.Destructive,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = simpleSchema,
+        )
+        val originalTool = FakeTool(originalDef)
+        val registry = InMemoryToolRegistry(listOf(originalTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val args = buildJsonObject { put("param", "val1") }
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("call_1", "modify", args))),
+                ),
+            ),
+        )
+
+        val turnResult = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run modify")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(turnResult is ToolTurnResult.ConfirmationRequired)
+        val pending = (turnResult as ToolTurnResult.ConfirmationRequired).pending
+
+        // Attacker or dynamic system replaces tool in registry with changed definition (e.g. executionKind changed)
+        val changedDef = ToolDefinition(
+            id = ToolId("modify_system"),
+            name = "modify",
+            description = "Changed modify tool",
+            effect = ToolEffect.Destructive,
+            executionKind = ExecutionKind.AndroidIntent, // changed!
+            inputSchema = simpleSchema,
+        )
+        registry.register(FakeTool(changedDef))
+
+        val resumeResult = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run modify")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+
+        assertTrue(resumeResult is ToolTurnResult.Failed)
+        val failed = resumeResult as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("определение инструмента изменилось"))
+        assertEquals(0, originalTool.callCount)
+    }
+
+    @Test
+    fun `single use confirmation token executes once and replay fails closed`() = runTest {
+        val sensitiveTool = FakeTool(
+            ToolDefinition(
+                id = ToolId("action_1"),
+                name = "action",
+                description = "Sensitive action",
+                effect = ToolEffect.Destructive,
+                executionKind = ExecutionKind.LocalApi,
+                inputSchema = simpleSchema,
+            ),
+        )
+        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val args = buildJsonObject { put("param", "v") }
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "action", args))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm)),
+                ),
+            ),
+        )
+
+        val turn1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(turn1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        // First resume: succeeds and executes tool once
+        val resume1 = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+        assertTrue(resume1 is ToolTurnResult.Completed)
+        assertEquals(1, sensitiveTool.callCount)
+
+        // Second resume (replay attempt with same confirmation): fails closed
+        val replayResult = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+        assertTrue(replayResult is ToolTurnResult.Failed)
+        val failed = replayResult as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("уже был использован"))
+        assertEquals(1, sensitiveTool.callCount) // tool was NOT executed again
+    }
+
+    @Test
+    fun `later unrelated confirmation works normally after previous confirmation`() = runTest {
+        val toolA = FakeTool(
+            ToolDefinition(ToolId("t_a"), "t_a", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val toolB = FakeTool(
+            ToolDefinition(ToolId("t_b"), "t_b", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(toolA, toolB))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        // Turn A
+        val invokerA = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c_a", "t_a", buildJsonObject { put("param", "1") })))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done A", RayaEmotion.Calm))),
+            ),
+        )
+        val resultA = runner.runTurn(listOf(ConversationMessage(ConversationRole.User, "A")), 1, null, invokerA)
+        val pendingA = (resultA as ToolTurnResult.ConfirmationRequired).pending
+        val resumeA = runner.resumeConfirmedTurn(listOf(ConversationMessage(ConversationRole.User, "A")), 1, null, invokerA, pendingA, pendingA.token)
+        assertTrue(resumeA is ToolTurnResult.Completed)
+        assertEquals(1, toolA.callCount)
+
+        // Turn B (unrelated later confirmation)
+        val invokerB = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c_b", "t_b", buildJsonObject { put("param", "2") })))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done B", RayaEmotion.Calm))),
+            ),
+        )
+        val resultB = runner.runTurn(listOf(ConversationMessage(ConversationRole.User, "B")), 2, null, invokerB)
+        val pendingB = (resultB as ToolTurnResult.ConfirmationRequired).pending
+        val resumeB = runner.resumeConfirmedTurn(listOf(ConversationMessage(ConversationRole.User, "B")), 2, null, invokerB, pendingB, pendingB.token)
+        assertTrue(resumeB is ToolTurnResult.Completed)
+        assertEquals(1, toolB.callCount)
     }
 }

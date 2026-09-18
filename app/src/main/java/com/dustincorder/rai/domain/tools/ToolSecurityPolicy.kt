@@ -10,26 +10,36 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
+ * Monotonic time abstraction (Android-free pure Kotlin / JVM).
+ */
+fun interface MonotonicClock {
+    fun markMonotonicMs(): Long
+}
+
+/**
  * Single-use, cryptographic token tying an approved or proposed tool execution
- * to its exact parameters, turn epoch, and expiration time.
+ * to its exact parameters, execution kind, turn epoch, and monotonic expiration time.
  */
 @Serializable
 data class ActionConfirmationToken(
     val tokenId: String = UUID.randomUUID().toString(),
     val toolId: ToolId,
+    val executionKind: ExecutionKind,
     val canonicalArgumentsHash: String,
     val turnEpoch: Int,
     val expiresAtMs: Long,
 ) {
     fun isValidFor(
         targetToolId: ToolId,
+        targetExecutionKind: ExecutionKind,
         arguments: JsonObject,
         currentTurnEpoch: Int,
-        nowMs: Long,
+        nowMonotonicMs: Long,
     ): Boolean {
         if (toolId != targetToolId) return false
+        if (executionKind != targetExecutionKind) return false
         if (turnEpoch != currentTurnEpoch) return false
-        if (nowMs >= expiresAtMs) return false
+        if (nowMonotonicMs >= expiresAtMs) return false
         val currentHash = computeCanonicalArgumentsHash(arguments)
         return canonicalArgumentsHash == currentHash
     }
@@ -54,7 +64,7 @@ interface ToolSecurityPolicy {
 }
 
 class DefaultToolSecurityPolicy(
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val clock: MonotonicClock = MonotonicClock { System.nanoTime() / 1_000_000L },
     private val tokenValidityDurationMs: Long = 60_000L,
 ) : ToolSecurityPolicy {
 
@@ -80,16 +90,17 @@ class DefaultToolSecurityPolicy(
             return ToolPolicyDecision.Allow
         }
 
-        val currentTime = now()
-        if (confirmationToken != null && confirmationToken.isValidFor(tool.id, arguments, turnEpoch, currentTime)) {
+        val currentMonotonic = clock.markMonotonicMs()
+        if (confirmationToken != null && confirmationToken.isValidFor(tool.id, tool.executionKind, arguments, turnEpoch, currentMonotonic)) {
             return ToolPolicyDecision.Allow
         }
 
         val freshToken = ActionConfirmationToken(
             toolId = tool.id,
+            executionKind = tool.executionKind,
             canonicalArgumentsHash = computeCanonicalArgumentsHash(arguments),
             turnEpoch = turnEpoch,
-            expiresAtMs = currentTime + tokenValidityDurationMs,
+            expiresAtMs = currentMonotonic + tokenValidityDurationMs,
         )
 
         return ToolPolicyDecision.RequiresConfirmation(

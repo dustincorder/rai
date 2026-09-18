@@ -104,6 +104,22 @@ class GeminiReplyProvider(
         return client.postJson(url, payload.toString(), apiKey)
     }
 
+    fun streamPayload(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): Flow<String> {
+        val url = "${baseUrl.trimEnd('/')}/models/$model:streamGenerateContent?alt=sse"
+        val request = Request.Builder()
+            .url(url)
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "text/event-stream")
+            .apply { if (!apiKey.isNullOrBlank()) header("x-goog-api-key", apiKey) }
+            .build()
+        return client.streamPostLines(request, json)
+    }
+
     /** Streams raw SSE content chunks for [ReplyStreaming.toReplyEvents]. */
     fun streamRaw(
         baseUrl: String,

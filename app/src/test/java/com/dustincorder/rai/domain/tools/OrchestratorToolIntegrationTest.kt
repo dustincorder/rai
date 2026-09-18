@@ -72,10 +72,11 @@ class OrchestratorToolIntegrationTest {
 
         override fun streamRound(
             messages: List<ConversationMessage>,
-            exposedTools: List<ToolDefinition>,
+            candidateTools: List<ToolDefinition>,
             steps: List<ModelRoundStep>,
             languageTag: String?,
         ): Flow<ModelRoundStreamEvent> = flow {
+            emit(ModelRoundStreamEvent.ExposedTools(candidateTools))
             val events = roundEvents.getOrElse(round++) { emptyList() }
             for (event in events) {
                 emit(event)

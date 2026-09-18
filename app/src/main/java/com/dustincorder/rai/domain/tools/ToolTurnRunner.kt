@@ -52,7 +52,12 @@ data class PendingToolConfirmation(
     val remainingCallsInBatch: List<ToolCall> = emptyList(),
     val currentBatchFeedbacks: List<ModelRoundStep.ToolExecutionFeedback> = emptyList(),
     val totalCallsRequested: Int = 0,
-)
+    val exposedTools: List<ToolDefinition> = emptyList(),
+) {
+    private val isConsumed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    fun markConsumed(): Boolean = isConsumed.compareAndSet(false, true)
+}
 
 sealed interface ToolTurnError {
     data class RoundBudgetExceeded(val roundsRun: Int) : ToolTurnError
@@ -67,9 +72,9 @@ class ToolTurnRunner(
     private val securityPolicy: ToolSecurityPolicy = DefaultToolSecurityPolicy(),
     private val projector: ToolResultProjector = DefaultToolResultProjector(),
     private val budget: ToolLoopBudget = ToolLoopBudget(),
+    private val monotonicClock: MonotonicClock = MonotonicClock { System.nanoTime() / 1_000_000L },
     private val now: () -> Long = { System.currentTimeMillis() },
 ) {
-    private val consumedTokenIds = ConcurrentHashMap.newKeySet<String>()
 
     suspend fun runTurn(
         messages: List<ConversationMessage>,
@@ -91,14 +96,17 @@ class ToolTurnRunner(
                     round++
 
                     val activeTools = registry.activeTools().map { it.definition }
-                    val exposedTools = modelInvoker.filterExposedTools(activeTools)
+                    var exposedToolsForRound = activeTools
 
                     var stepCompletedResponse: RayaResponse? = null
                     var stepToolCalls: List<ToolCall>? = null
 
                     try {
-                        modelInvoker.streamRound(messages, exposedTools, steps, languageTag).collect { event ->
+                        modelInvoker.streamRound(messages, activeTools, steps, languageTag).collect { event ->
                             when (event) {
+                                is ModelRoundStreamEvent.ExposedTools -> {
+                                    exposedToolsForRound = event.tools
+                                }
                                 is ModelRoundStreamEvent.TextDelta -> {
                                     onTextDelta(event.text)
                                 }
@@ -151,7 +159,7 @@ class ToolTurnRunner(
 
                         val executionOutcome = processCall(
                             call = call,
-                            exposedTools = exposedTools,
+                            exposedTools = exposedToolsForRound,
                             turnEpoch = turnEpoch,
                             executedSnapshots = executedSnapshots,
                         )
@@ -172,6 +180,7 @@ class ToolTurnRunner(
                                         remainingCallsInBatch = calls.subList(index + 1, calls.size),
                                         currentBatchFeedbacks = batchFeedbacks.toList(),
                                         totalCallsRequested = totalCallsRequested,
+                                        exposedTools = exposedToolsForRound,
                                     )
                                 )
                             }
@@ -205,20 +214,32 @@ class ToolTurnRunner(
         var round = pending.round
         var totalCallsRequested = pending.totalCallsRequested
 
-        if (!consumedTokenIds.add(confirmationToken.tokenId)) {
+        if (!pending.markConsumed()) {
             return ToolTurnResult.Failed(ToolTurnError.ModelError("Действие отклонено: токен подтверждения уже был использован."))
         }
 
-        if (!confirmationToken.isValidFor(pending.definition.id, pending.call.arguments, turnEpoch, now())) {
-            return ToolTurnResult.Failed(ToolTurnError.ModelError("Действие отклонено: недействительный токен подтверждения."))
+        val tool = registry.get(pending.call.toolName) ?: return ToolTurnResult.Failed(
+            ToolTurnError.ModelError("Инструмент '${pending.call.toolName}' не найден в реестре.")
+        )
+
+        if (tool.definition.id != pending.definition.id ||
+            tool.definition.name != pending.call.toolName ||
+            tool.definition.executionKind != pending.definition.executionKind ||
+            !confirmationToken.isValidFor(
+                tool.definition.id,
+                tool.definition.executionKind,
+                pending.call.arguments,
+                turnEpoch,
+                monotonicClock.markMonotonicMs(),
+            )
+        ) {
+            return ToolTurnResult.Failed(
+                ToolTurnError.ModelError("Действие отклонено: определение инструмента изменилось или токен недействителен.")
+            )
         }
 
         try {
             return withTimeout(budget.wholeTurnTimeoutMs) {
-                val tool = registry.get(pending.call.toolName) ?: return@withTimeout ToolTurnResult.Failed(
-                    ToolTurnError.ModelError("Инструмент '${pending.call.toolName}' не найден в реестре.")
-                )
-
                 // Execute the confirmed tool
                 val confirmedResult = executeToolWithValidation(tool, pending.call)
                 executedSnapshots.add(
@@ -240,8 +261,7 @@ class ToolTurnRunner(
                     )
                 )
 
-                val activeTools = registry.activeTools().map { it.definition }
-                val exposedTools = modelInvoker.filterExposedTools(activeTools)
+                val exposedTools = pending.exposedTools
 
                 // Process any remaining calls from the paused batch
                 val remaining = pending.remainingCallsInBatch
@@ -278,6 +298,7 @@ class ToolTurnRunner(
                                     remainingCallsInBatch = remaining.subList(index + 1, remaining.size),
                                     currentBatchFeedbacks = batchFeedbacks.toList(),
                                     totalCallsRequested = totalCallsRequested,
+                                    exposedTools = exposedTools,
                                 )
                             )
                         }
@@ -292,14 +313,17 @@ class ToolTurnRunner(
                     round++
 
                     val currentActive = registry.activeTools().map { it.definition }
-                    val currentExposed = modelInvoker.filterExposedTools(currentActive)
+                    var exposedToolsForRound = currentActive
 
                     var stepCompletedResponse: RayaResponse? = null
                     var stepToolCalls: List<ToolCall>? = null
 
                     try {
-                        modelInvoker.streamRound(messages, currentExposed, steps, languageTag).collect { event ->
+                        modelInvoker.streamRound(messages, currentActive, steps, languageTag).collect { event ->
                             when (event) {
+                                is ModelRoundStreamEvent.ExposedTools -> {
+                                    exposedToolsForRound = event.tools
+                                }
                                 is ModelRoundStreamEvent.TextDelta -> {
                                     onTextDelta(event.text)
                                 }
@@ -338,7 +362,7 @@ class ToolTurnRunner(
                     }
 
                     steps.add(ModelRoundStep.AssistantToolCalls(calls))
-                    val nextBatchFeedbacks = mutableListOf<ModelRoundStep.ToolExecutionFeedback>()
+                    val batchFeedbacksForRound = mutableListOf<ModelRoundStep.ToolExecutionFeedback>()
 
                     for (index in calls.indices) {
                         currentCoroutineContext().ensureActive()
@@ -352,14 +376,14 @@ class ToolTurnRunner(
 
                         val executionOutcome = processCall(
                             call = call,
-                            exposedTools = currentExposed,
+                            exposedTools = exposedToolsForRound,
                             turnEpoch = turnEpoch,
                             executedSnapshots = executedSnapshots,
                         )
 
                         when (executionOutcome) {
                             is CallProcessOutcome.Feedback -> {
-                                nextBatchFeedbacks.add(executionOutcome.feedback)
+                                batchFeedbacksForRound.add(executionOutcome.feedback)
                             }
                             is CallProcessOutcome.ConfirmationNeeded -> {
                                 return@withTimeout ToolTurnResult.ConfirmationRequired(
@@ -371,15 +395,16 @@ class ToolTurnRunner(
                                         executedCalls = executedSnapshots.toList(),
                                         round = round,
                                         remainingCallsInBatch = calls.subList(index + 1, calls.size),
-                                        currentBatchFeedbacks = nextBatchFeedbacks.toList(),
+                                        currentBatchFeedbacks = batchFeedbacksForRound.toList(),
                                         totalCallsRequested = totalCallsRequested,
+                                        exposedTools = exposedToolsForRound,
                                     )
                                 )
                             }
                         }
                     }
 
-                    steps.addAll(nextBatchFeedbacks)
+                    steps.addAll(batchFeedbacksForRound)
                 }
 
                 ToolTurnResult.Failed(ToolTurnError.RoundBudgetExceeded(round))

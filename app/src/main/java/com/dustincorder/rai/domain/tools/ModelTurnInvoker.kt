@@ -10,17 +10,16 @@ import kotlinx.serialization.json.JsonObject
  * with streaming deltas, 0..N tool calls, and tool result feedback.
  */
 interface ModelTurnInvoker {
-    fun filterExposedTools(tools: List<ToolDefinition>): List<ToolDefinition> = tools
-
     fun streamRound(
         messages: List<ConversationMessage>,
-        exposedTools: List<ToolDefinition>,
+        candidateTools: List<ToolDefinition>,
         steps: List<ModelRoundStep>,
         languageTag: String?,
     ): Flow<ModelRoundStreamEvent>
 }
 
 sealed interface ModelRoundStreamEvent {
+    data class ExposedTools(val tools: List<ToolDefinition>) : ModelRoundStreamEvent
     data class TextDelta(val text: String) : ModelRoundStreamEvent
     data class ToolCalls(val calls: List<ToolCall>) : ModelRoundStreamEvent
     data class Completed(val response: RayaResponse) : ModelRoundStreamEvent

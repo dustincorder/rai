@@ -7,6 +7,10 @@ import com.dustincorder.rai.domain.tools.ToolCall
 import com.dustincorder.rai.domain.tools.ToolDefinition
 import com.dustincorder.rai.domain.tools.ToolEffect
 import com.dustincorder.rai.domain.tools.ToolId
+import com.dustincorder.rai.domain.tools.ModelRoundStreamEvent
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -482,5 +486,111 @@ class ProviderToolAdaptersTest {
         assertTrue(openAiAdapter.project(stringRoot) is ProviderSchemaProjection.Unsupported)
         assertTrue(anthropicAdapter.project(stringRoot) is ProviderSchemaProjection.Unsupported)
         assertTrue(geminiAdapter.project(stringRoot) is ProviderSchemaProjection.Unsupported)
+    }
+
+    @Test
+    fun `openAi stream accumulator emits multiple text deltas incrementally then completed`() = runTest {
+        val accumulator = OpenAiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"choices":[{"delta":{"content":"Hello "}}]}""",
+            """{"choices":[{"delta":{"content":"world!"}}]}""",
+            """[DONE]""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(3, events.size)
+        assertTrue(events[0] is ModelRoundStreamEvent.TextDelta)
+        assertEquals("Hello ", (events[0] as ModelRoundStreamEvent.TextDelta).text)
+        assertTrue(events[1] is ModelRoundStreamEvent.TextDelta)
+        assertEquals("world!", (events[1] as ModelRoundStreamEvent.TextDelta).text)
+        assertTrue(events[2] is ModelRoundStreamEvent.Completed)
+        val completed = events[2] as ModelRoundStreamEvent.Completed
+        assertEquals("Hello world!", completed.response.text)
+    }
+
+    @Test
+    fun `openAi stream accumulator accumulates partial tool call arguments before emitting complete tool call`() = runTest {
+        val accumulator = OpenAiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{\"q\":"}}]}}]}""",
+            """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"android\"}"}}]}}]}""",
+            """[DONE]""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(1, events.size)
+        assertTrue(events[0] is ModelRoundStreamEvent.ToolCalls)
+        val toolCalls = (events[0] as ModelRoundStreamEvent.ToolCalls).calls
+        assertEquals(1, toolCalls.size)
+        assertEquals("call_1", toolCalls[0].callId)
+        assertEquals("search", toolCalls[0].toolName)
+        assertEquals("android", toolCalls[0].arguments["q"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `anthropic stream accumulator emits multiple text deltas incrementally then completed`() = runTest {
+        val accumulator = AnthropicStreamAccumulator(json)
+        val chunks = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Streaming "}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reply!"}}""",
+            """{"type":"message_stop"}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(3, events.size)
+        assertEquals("Streaming ", (events[0] as ModelRoundStreamEvent.TextDelta).text)
+        assertEquals("reply!", (events[1] as ModelRoundStreamEvent.TextDelta).text)
+        val completed = events[2] as ModelRoundStreamEvent.Completed
+        assertEquals("Streaming reply!", completed.response.text)
+    }
+
+    @Test
+    fun `anthropic stream accumulator accumulates input json delta before emitting complete tool call`() = runTest {
+        val accumulator = AnthropicStreamAccumulator(json)
+        val chunks = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"lookup","input":{}}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"id\":\""}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"42\"}"}}""",
+            """{"type":"message_stop"}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(1, events.size)
+        val toolCalls = (events[0] as ModelRoundStreamEvent.ToolCalls).calls
+        assertEquals(1, toolCalls.size)
+        assertEquals("toolu_01", toolCalls[0].callId)
+        assertEquals("lookup", toolCalls[0].toolName)
+        assertEquals("42", toolCalls[0].arguments["id"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `gemini stream accumulator emits multiple text deltas then completed`() = runTest {
+        val accumulator = GeminiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"candidates":[{"content":{"parts":[{"text":"Hello "}]}}]}""",
+            """{"candidates":[{"content":{"parts":[{"text":"Gemini!"}]}}]}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(3, events.size)
+        assertEquals("Hello ", (events[0] as ModelRoundStreamEvent.TextDelta).text)
+        assertEquals("Gemini!", (events[1] as ModelRoundStreamEvent.TextDelta).text)
+        assertEquals("Hello Gemini!", (events[2] as ModelRoundStreamEvent.Completed).response.text)
+    }
+
+    @Test
+    fun `gemini stream accumulator extracts function call as complete tool call`() = runTest {
+        val accumulator = GeminiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Berlin"}}}]}}]}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(1, events.size)
+        val calls = (events[0] as ModelRoundStreamEvent.ToolCalls).calls
+        assertEquals(1, calls.size)
+        assertEquals("get_weather", calls[0].toolName)
+        assertEquals("Berlin", calls[0].arguments["city"]?.jsonPrimitive?.content)
     }
 }

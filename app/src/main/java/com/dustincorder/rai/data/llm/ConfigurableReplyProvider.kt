@@ -22,8 +22,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
+import com.dustincorder.rai.data.llm.tools.AnthropicStreamAccumulator
 import com.dustincorder.rai.data.llm.tools.AnthropicToolAdapter
+import com.dustincorder.rai.data.llm.tools.GeminiStreamAccumulator
 import com.dustincorder.rai.data.llm.tools.GeminiToolAdapter
+import com.dustincorder.rai.data.llm.tools.OpenAiStreamAccumulator
 import com.dustincorder.rai.data.llm.tools.OpenAiToolAdapter
 import com.dustincorder.rai.domain.tools.ModelRoundStep
 import com.dustincorder.rai.domain.tools.ModelRoundStreamEvent
@@ -31,7 +34,6 @@ import com.dustincorder.rai.domain.tools.ModelTurnInvoker
 import com.dustincorder.rai.domain.tools.ProviderSchemaProjection
 import com.dustincorder.rai.domain.tools.ProviderSchemaProjector
 import com.dustincorder.rai.domain.tools.ToolDefinition
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -138,40 +140,32 @@ class ConfigurableReplyProvider(
         }
     }
 
-    override fun filterExposedTools(tools: List<ToolDefinition>): List<ToolDefinition> {
-        val settings = runCatching { runBlocking { settingsRepository.settings.first() } }.getOrNull()
-            ?: return tools
-        val adapter: ProviderSchemaProjector = when (settings.protocol) {
-            LlmProtocol.OpenAiCompatible -> OpenAiToolAdapter(json)
-            LlmProtocol.AnthropicCompatible -> AnthropicToolAdapter(json)
-            LlmProtocol.Gemini -> GeminiToolAdapter(json)
-        }
-        return tools.filter { tool ->
-            when (adapter.project(tool.inputSchema)) {
-                is ProviderSchemaProjection.Supported,
-                is ProviderSchemaProjection.LosslesslyProjected -> true
-                is ProviderSchemaProjection.Unsupported -> false
-            }
-        }
-    }
-
     override fun streamRound(
         messages: List<ConversationMessage>,
-        exposedTools: List<ToolDefinition>,
+        candidateTools: List<ToolDefinition>,
         steps: List<ModelRoundStep>,
         languageTag: String?,
     ): Flow<ModelRoundStreamEvent> = flow {
         if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
-        val settings = settingsRepository.settings.first()
+        val settings = try {
+            settingsRepository.settings.first()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (e: Throwable) {
+            emit(ModelRoundStreamEvent.ExposedTools(emptyList()))
+            throw LlmConfigurationException("Настройки не загружены: ${e.message}")
+        }
         val config = settings.connectionConfig()
         try {
             requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
             val apiKey = apiKeyStore.read(settings.provider)
             val modelId = settings.resolvedModelId()
             if (modelId.isBlank() || settings.baseUrl.isBlank()) {
+                emit(ModelRoundStreamEvent.ExposedTools(emptyList()))
                 throw LlmConfigurationException("Настрой LLM-провайдера.")
             }
             if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
+                emit(ModelRoundStreamEvent.ExposedTools(emptyList()))
                 throw LlmSafeException("API key не сохранён.")
             }
             val prompt = buildString {
@@ -179,10 +173,25 @@ class ConfigurableReplyProvider(
                 if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
             }
 
+            // Atomic exposed tool selection for this round
+            val adapter: ProviderSchemaProjector = when (settings.protocol) {
+                LlmProtocol.OpenAiCompatible -> OpenAiToolAdapter(json)
+                LlmProtocol.AnthropicCompatible -> AnthropicToolAdapter(json)
+                LlmProtocol.Gemini -> GeminiToolAdapter(json)
+            }
+            val exposedTools = candidateTools.filter { tool ->
+                when (adapter.project(tool.inputSchema)) {
+                    is ProviderSchemaProjection.Supported,
+                    is ProviderSchemaProjection.LosslesslyProjected -> true
+                    is ProviderSchemaProjection.Unsupported -> false
+                }
+            }
+            emit(ModelRoundStreamEvent.ExposedTools(exposedTools))
+
             when (settings.protocol) {
                 LlmProtocol.OpenAiCompatible -> {
-                    val adapter = OpenAiToolAdapter(json)
-                    val toolsArray = adapter.formatToolsPayload(exposedTools)
+                    val openAiAdapter = OpenAiToolAdapter(json)
+                    val toolsArray = openAiAdapter.formatToolsPayload(exposedTools)
                     val baseMessages = buildList {
                         add(
                             buildJsonObject {
@@ -199,7 +208,7 @@ class ConfigurableReplyProvider(
                             )
                         }
                     }
-                    val stepMessages = adapter.formatStepMessages(steps)
+                    val stepMessages = openAiAdapter.formatStepMessages(steps)
                     val payload = buildJsonObject {
                         put("model", modelId)
                         put(
@@ -213,33 +222,23 @@ class ConfigurableReplyProvider(
                             put("tools", toolsArray)
                         }
                     }
-                    val raw = openAi.executePayload(settings.baseUrl, apiKey, payload)
-                    val parsed = json.parseToJsonElement(raw).jsonObject
-                    val messageObj = parsed["choices"]?.jsonArray?.firstOrNull()?.jsonObject
-                        ?.get("message")?.jsonObject ?: buildJsonObject {}
-                    val toolCalls = adapter.parseToolCalls(messageObj)
-                    if (toolCalls.isNotEmpty()) {
-                        emit(ModelRoundStreamEvent.ToolCalls(toolCalls))
-                    } else {
-                        val content = messageObj["content"]?.jsonPrimitive?.content ?: ""
-                        val rayaResponse = parseRayaResponse(content, json)
-                        if (rayaResponse.text.isNotEmpty()) {
-                            emit(ModelRoundStreamEvent.TextDelta(rayaResponse.text))
-                        }
-                        emit(ModelRoundStreamEvent.Completed(rayaResponse))
+                    val accumulator = OpenAiStreamAccumulator(json)
+                    openAi.streamPayload(settings.baseUrl, apiKey, payload).collect { chunk ->
+                        accumulator.onChunk(chunk).forEach { emit(it) }
                     }
+                    emit(accumulator.onFinish())
                 }
 
                 LlmProtocol.AnthropicCompatible -> {
-                    val adapter = AnthropicToolAdapter(json)
-                    val toolsArray = adapter.formatToolsPayload(exposedTools)
+                    val anthropicAdapter = AnthropicToolAdapter(json)
+                    val toolsArray = anthropicAdapter.formatToolsPayload(exposedTools)
                     val baseMessages = messages.map { message ->
                         buildJsonObject {
                             put("role", message.role.transport)
                             put("content", message.contextText)
                         }
                     }
-                    val stepMessages = adapter.formatStepMessages(steps)
+                    val stepMessages = anthropicAdapter.formatStepMessages(steps)
                     val payload = buildJsonObject {
                         put("model", modelId)
                         put("max_tokens", 4096)
@@ -255,27 +254,16 @@ class ConfigurableReplyProvider(
                             put("tools", toolsArray)
                         }
                     }
-                    val raw = anthropic.executePayload(settings.baseUrl, apiKey, payload)
-                    val parsed = json.parseToJsonElement(raw).jsonObject
-                    val contentArray = parsed["content"]?.jsonArray ?: buildJsonArray {}
-                    val toolCalls = adapter.parseToolCalls(contentArray)
-                    if (toolCalls.isNotEmpty()) {
-                        emit(ModelRoundStreamEvent.ToolCalls(toolCalls))
-                    } else {
-                        val text = contentArray.mapNotNull { it.jsonObject }
-                            .firstOrNull { it["type"]?.jsonPrimitive?.content == "text" }
-                            ?.get("text")?.jsonPrimitive?.content ?: ""
-                        val rayaResponse = parseRayaResponse(text, json)
-                        if (rayaResponse.text.isNotEmpty()) {
-                            emit(ModelRoundStreamEvent.TextDelta(rayaResponse.text))
-                        }
-                        emit(ModelRoundStreamEvent.Completed(rayaResponse))
+                    val accumulator = AnthropicStreamAccumulator(json)
+                    anthropic.streamPayload(settings.baseUrl, apiKey, payload).collect { chunk ->
+                        accumulator.onChunk(chunk).forEach { emit(it) }
                     }
+                    emit(accumulator.onFinish())
                 }
 
                 LlmProtocol.Gemini -> {
-                    val adapter = GeminiToolAdapter(json)
-                    val toolsArray = adapter.formatToolsPayload(exposedTools)
+                    val geminiAdapter = GeminiToolAdapter(json)
+                    val toolsArray = geminiAdapter.formatToolsPayload(exposedTools)
                     val baseContents = messages.map { message ->
                         buildJsonObject {
                             put("role", if (message.role == ConversationRole.Assistant) "model" else "user")
@@ -287,7 +275,7 @@ class ConfigurableReplyProvider(
                             )
                         }
                     }
-                    val stepContents = adapter.formatStepContents(steps)
+                    val stepContents = geminiAdapter.formatStepContents(steps)
                     val payload = buildJsonObject {
                         put(
                             "system_instruction",
@@ -311,22 +299,11 @@ class ConfigurableReplyProvider(
                             put("tools", toolsArray)
                         }
                     }
-                    val raw = gemini.executePayload(settings.baseUrl, modelId, apiKey, payload)
-                    val parsed = json.parseToJsonElement(raw).jsonObject
-                    val candidatesArray = parsed["candidates"]?.jsonArray ?: buildJsonArray {}
-                    val toolCalls = adapter.parseToolCalls(candidatesArray)
-                    if (toolCalls.isNotEmpty()) {
-                        emit(ModelRoundStreamEvent.ToolCalls(toolCalls))
-                    } else {
-                        val firstCandidate = candidatesArray.firstOrNull()?.jsonObject
-                        val parts = firstCandidate?.get("content")?.jsonObject?.get("parts")?.jsonArray
-                        val text = parts?.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.content }?.joinToString("") ?: ""
-                        val rayaResponse = parseRayaResponse(text, json)
-                        if (rayaResponse.text.isNotEmpty()) {
-                            emit(ModelRoundStreamEvent.TextDelta(rayaResponse.text))
-                        }
-                        emit(ModelRoundStreamEvent.Completed(rayaResponse))
+                    val accumulator = GeminiStreamAccumulator(json)
+                    gemini.streamPayload(settings.baseUrl, modelId, apiKey, payload).collect { chunk ->
+                        accumulator.onChunk(chunk).forEach { emit(it) }
                     }
+                    emit(accumulator.onFinish())
                 }
             }
         } catch (cancellation: CancellationException) {
