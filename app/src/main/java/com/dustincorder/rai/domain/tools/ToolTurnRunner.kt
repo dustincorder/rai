@@ -53,10 +53,25 @@ data class PendingToolConfirmation(
     val currentBatchFeedbacks: List<ModelRoundStep.ToolExecutionFeedback> = emptyList(),
     val totalCallsRequested: Int = 0,
     val exposedTools: List<ToolDefinition> = emptyList(),
-) {
-    private val isConsumed = java.util.concurrent.atomic.AtomicBoolean(false)
+)
 
-    fun markConsumed(): Boolean = isConsumed.compareAndSet(false, true)
+class BoundedConsumedTokenStore(private val maxEntries: Int = 128) {
+    private val lock = Any()
+    private val map = object : LinkedHashMap<String, Long>(maxEntries, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
+            return size > maxEntries
+        }
+    }
+
+    fun markConsumed(tokenId: String, expiresAtMs: Long): Boolean = synchronized(lock) {
+        if (map.containsKey(tokenId)) return false
+        val now = System.currentTimeMillis()
+        map.entries.removeIf { it.value < now }
+        map[tokenId] = expiresAtMs
+        return true
+    }
+
+    fun size(): Int = synchronized(lock) { map.size }
 }
 
 sealed interface ToolTurnError {
@@ -74,6 +89,7 @@ class ToolTurnRunner(
     private val budget: ToolLoopBudget = ToolLoopBudget(),
     private val monotonicClock: MonotonicClock = MonotonicClock { System.nanoTime() / 1_000_000L },
     private val now: () -> Long = { System.currentTimeMillis() },
+    private val consumedTokenStore: BoundedConsumedTokenStore = BoundedConsumedTokenStore(),
 ) {
 
     suspend fun runTurn(
@@ -96,7 +112,8 @@ class ToolTurnRunner(
                     round++
 
                     val activeTools = registry.activeTools().map { it.definition }
-                    var exposedToolsForRound = activeTools
+                    var exposedToolsForRound: List<ToolDefinition> = emptyList()
+                    var exposedToolsReceived = false
 
                     var stepCompletedResponse: RayaResponse? = null
                     var stepToolCalls: List<ToolCall>? = null
@@ -105,12 +122,16 @@ class ToolTurnRunner(
                         modelInvoker.streamRound(messages, activeTools, steps, languageTag).collect { event ->
                             when (event) {
                                 is ModelRoundStreamEvent.ExposedTools -> {
+                                    exposedToolsReceived = true
                                     exposedToolsForRound = event.tools
                                 }
                                 is ModelRoundStreamEvent.TextDelta -> {
                                     onTextDelta(event.text)
                                 }
                                 is ModelRoundStreamEvent.ToolCalls -> {
+                                    if (!exposedToolsReceived) {
+                                        throw IllegalStateException("Модель вернула вызовы инструментов до объявления exposed tools.")
+                                    }
                                     stepToolCalls = event.calls
                                 }
                                 is ModelRoundStreamEvent.Completed -> {
@@ -134,6 +155,12 @@ class ToolTurnRunner(
                     if (calls.isEmpty()) {
                         return@withTimeout ToolTurnResult.Failed(
                             ToolTurnError.ModelError("Model returned empty tool calls list without reply")
+                        )
+                    }
+
+                    if (!exposedToolsReceived) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.ModelError("Модель вернула вызовы инструментов без объявления exposed tools.")
                         )
                     }
 
@@ -214,8 +241,16 @@ class ToolTurnRunner(
         var round = pending.round
         var totalCallsRequested = pending.totalCallsRequested
 
-        if (!pending.markConsumed()) {
-            return ToolTurnResult.Failed(ToolTurnError.ModelError("Действие отклонено: токен подтверждения уже был использован."))
+        if (confirmationToken.tokenId != pending.token.tokenId) {
+            return ToolTurnResult.Failed(
+                ToolTurnError.ModelError("Действие отклонено: токен подтверждения не соответствует ожидаемому.")
+            )
+        }
+
+        if (!consumedTokenStore.markConsumed(confirmationToken.tokenId, confirmationToken.expiresAtMs)) {
+            return ToolTurnResult.Failed(
+                ToolTurnError.ModelError("Действие отклонено: токен подтверждения уже был использован.")
+            )
         }
 
         val tool = registry.get(pending.call.toolName) ?: return ToolTurnResult.Failed(
@@ -313,7 +348,8 @@ class ToolTurnRunner(
                     round++
 
                     val currentActive = registry.activeTools().map { it.definition }
-                    var exposedToolsForRound = currentActive
+                    var exposedToolsForRound: List<ToolDefinition> = emptyList()
+                    var exposedToolsReceived = false
 
                     var stepCompletedResponse: RayaResponse? = null
                     var stepToolCalls: List<ToolCall>? = null
@@ -322,12 +358,16 @@ class ToolTurnRunner(
                         modelInvoker.streamRound(messages, currentActive, steps, languageTag).collect { event ->
                             when (event) {
                                 is ModelRoundStreamEvent.ExposedTools -> {
+                                    exposedToolsReceived = true
                                     exposedToolsForRound = event.tools
                                 }
                                 is ModelRoundStreamEvent.TextDelta -> {
                                     onTextDelta(event.text)
                                 }
                                 is ModelRoundStreamEvent.ToolCalls -> {
+                                    if (!exposedToolsReceived) {
+                                        throw IllegalStateException("Модель вернула вызовы инструментов до объявления exposed tools.")
+                                    }
                                     stepToolCalls = event.calls
                                 }
                                 is ModelRoundStreamEvent.Completed -> {
@@ -351,6 +391,12 @@ class ToolTurnRunner(
                     if (calls.isEmpty()) {
                         return@withTimeout ToolTurnResult.Failed(
                             ToolTurnError.ModelError("Model returned empty tool calls list without reply")
+                        )
+                    }
+
+                    if (!exposedToolsReceived) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.ModelError("Модель вернула вызовы инструментов без объявления exposed tools.")
                         )
                     }
 

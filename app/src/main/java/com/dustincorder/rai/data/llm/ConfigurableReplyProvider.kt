@@ -26,6 +26,7 @@ import com.dustincorder.rai.data.llm.tools.AnthropicStreamAccumulator
 import com.dustincorder.rai.data.llm.tools.AnthropicToolAdapter
 import com.dustincorder.rai.data.llm.tools.GeminiStreamAccumulator
 import com.dustincorder.rai.data.llm.tools.GeminiToolAdapter
+import com.dustincorder.rai.data.llm.tools.MalformedToolCallStreamException
 import com.dustincorder.rai.data.llm.tools.OpenAiStreamAccumulator
 import com.dustincorder.rai.data.llm.tools.OpenAiToolAdapter
 import com.dustincorder.rai.domain.tools.ModelRoundStep
@@ -308,6 +309,9 @@ class ConfigurableReplyProvider(
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
+        } catch (malformed: MalformedToolCallStreamException) {
+            logDiagnostics(malformed, config)
+            throw LlmSafeException("Провайдер вернул некорректный ответ: ${malformed.message}")
         } catch (failure: Throwable) {
             logDiagnostics(failure, config)
             throw LlmSafeException(LlmErrorClassifier.userMessage(failure))

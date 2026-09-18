@@ -59,7 +59,7 @@ class ToolTurnRunnerTest {
 
     private class ScriptedModelInvoker(
         private val rounds: List<List<ModelRoundStreamEvent>>,
-        private val exposedFilter: (List<ToolDefinition>) -> List<ToolDefinition> = { it },
+        private val exposedFilter: ((List<ToolDefinition>) -> List<ToolDefinition>)? = { it },
     ) : ModelTurnInvoker {
         var invocationCount = 0
         val historySteps = mutableListOf<List<ModelRoundStep>>()
@@ -72,9 +72,11 @@ class ToolTurnRunnerTest {
             languageTag: String?,
         ): Flow<ModelRoundStreamEvent> = flow {
             historySteps.add(steps.toList())
-            val exposed = exposedFilter(candidateTools)
-            exposedToolsSeen.add(exposed)
-            emit(ModelRoundStreamEvent.ExposedTools(exposed))
+            if (exposedFilter != null) {
+                val exposed = exposedFilter.invoke(candidateTools)
+                exposedToolsSeen.add(exposed)
+                emit(ModelRoundStreamEvent.ExposedTools(exposed))
+            }
             if (invocationCount >= rounds.size) {
                 error("No scripted response for round $invocationCount")
             }
@@ -1276,5 +1278,246 @@ class ToolTurnRunnerTest {
         val resumeB = runner.resumeConfirmedTurn(listOf(ConversationMessage(ConversationRole.User, "B")), 2, null, invokerB, pendingB, pendingB.token)
         assertTrue(resumeB is ToolTurnResult.Completed)
         assertEquals(1, toolB.callCount)
+    }
+
+    @Test
+    fun `tool calls emitted without exposed tools declaration fails closed`() = runTest {
+        val tool = FakeTool(
+            ToolDefinition(ToolId("t"), "t", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(tool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("param", "val") })))),
+            ),
+            exposedFilter = null,
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Failed)
+        val failed = result as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError)
+        assertEquals(0, tool.callCount)
+    }
+
+    @Test
+    fun `tool calls emitted before exposed tools declaration fails closed`() = runTest {
+        val tool = FakeTool(
+            ToolDefinition(ToolId("t"), "t", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(tool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("param", "val") }))),
+                    ModelRoundStreamEvent.ExposedTools(listOf(tool.definition)),
+                ),
+            ),
+            exposedFilter = null,
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Failed)
+        val failed = result as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError)
+        assertEquals(0, tool.callCount)
+    }
+
+    @Test
+    fun `post-confirmation round tool calls emitted without exposed tools fails closed`() = runTest {
+        val toolA = FakeTool(
+            ToolDefinition(ToolId("del"), "del", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val toolB = FakeTool(
+            ToolDefinition(ToolId("next"), "next", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(toolA, toolB))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        // Round 1: normal invoker emitting ExposedTools -> requires confirmation
+        val invoker1 = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "del", buildJsonObject { put("param", "val") })))),
+            ),
+        )
+        val turn1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "delete")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker1,
+        )
+        assertTrue(turn1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        // Round 2 (post-confirmation): invoker emits tool calls WITHOUT ExposedTools
+        val invoker2 = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c2", "next", buildJsonObject { put("param", "val") })))),
+            ),
+            exposedFilter = null,
+        )
+
+        val resume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "delete")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker2,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+
+        assertTrue(resume is ToolTurnResult.Failed)
+        val failed = resume as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError)
+        assertEquals(1, toolA.callCount)
+        assertEquals(0, toolB.callCount)
+    }
+
+    @Test
+    fun `pending copy with same confirmation token replay fails closed`() = runTest {
+        val sensitiveTool = FakeTool(
+            ToolDefinition(
+                id = ToolId("action_copy"),
+                name = "action_copy",
+                description = "Sensitive action",
+                effect = ToolEffect.Destructive,
+                executionKind = ExecutionKind.LocalApi,
+                inputSchema = simpleSchema,
+            ),
+        )
+        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val args = buildJsonObject { put("param", "v") }
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "action_copy", args)))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+        )
+
+        val turn1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(turn1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        // First resume: succeeds
+        val resume1 = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+        assertTrue(resume1 is ToolTurnResult.Completed)
+        assertEquals(1, sensitiveTool.callCount)
+
+        // Pending copy replay: pending.copy() resets instance-bound state, but runner-level token store catches it
+        val pendingCopied = pending.copy()
+        val replayResult = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pendingCopied,
+            confirmationToken = pendingCopied.token,
+        )
+        assertTrue(replayResult is ToolTurnResult.Failed)
+        val failed = replayResult as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("уже был использован"))
+        assertEquals(1, sensitiveTool.callCount)
+    }
+
+    @Test
+    fun `confirmation token with mismatched tokenId is rejected`() = runTest {
+        val sensitiveTool = FakeTool(
+            ToolDefinition(
+                id = ToolId("action_mismatch"),
+                name = "action_mismatch",
+                description = "Sensitive action",
+                effect = ToolEffect.Destructive,
+                executionKind = ExecutionKind.LocalApi,
+                inputSchema = simpleSchema,
+            ),
+        )
+        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val args = buildJsonObject { put("param", "v") }
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "action_mismatch", args)))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+        )
+
+        val turn1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(turn1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        // Token with identical claims but different tokenId
+        val forgedToken = pending.token.copy(tokenId = "forged-token-id-999")
+
+        val resume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = forgedToken,
+        )
+
+        assertTrue(resume is ToolTurnResult.Failed)
+        val failed = resume as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("не соответствует"))
+        assertEquals(0, sensitiveTool.callCount)
+    }
+
+    @Test
+    fun `bounded consumed token store maintains capacity ceiling and expires entries`() {
+        val store = BoundedConsumedTokenStore(maxEntries = 5)
+        val now = System.currentTimeMillis()
+
+        // Insert 5 tokens
+        for (i in 1..5) {
+            assertTrue(store.markConsumed("token_$i", now + 10_000L))
+        }
+        assertEquals(5, store.size())
+
+        // Replaying any of them returns false
+        assertFalse(store.markConsumed("token_1", now + 10_000L))
+
+        // Inserting 6th token should evict eldest (token_1)
+        assertTrue(store.markConsumed("token_6", now + 10_000L))
+        assertEquals(5, store.size())
+
+        // token_1 was evicted so size is capped at 5
+        assertTrue(store.size() <= 5)
     }
 }

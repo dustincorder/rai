@@ -116,7 +116,8 @@ class GeminiToolAdapter(
             val functionCall = part["functionCall"]?.jsonObject ?: return@forEachIndexed
             val name = functionCall["name"]?.jsonPrimitive?.content ?: return@forEachIndexed
             val args = functionCall["args"]?.jsonObject ?: buildJsonObject {}
-            val callId = functionCall["id"]?.jsonPrimitive?.content ?: "gemini_call_${name}_$index"
+            val providerId = functionCall["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            val callId = providerId ?: "gemini_call_${name}_$index"
 
             if (!seenIds.add(callId)) {
                 throw IllegalArgumentException("Обнаружен дубликат callId '$callId' в ответе Gemini.")
@@ -127,7 +128,7 @@ class GeminiToolAdapter(
                     callId = callId,
                     toolName = name,
                     arguments = args,
-                    providerCorrelation = callId,
+                    providerCorrelation = providerId,
                 )
             )
         }
@@ -172,7 +173,7 @@ class GeminiToolAdapter(
                                                     buildJsonObject {
                                                         put("name", call.toolName)
                                                         put("args", call.arguments)
-                                                        if (!call.callId.startsWith("gemini_call_")) {
+                                                        if (!call.callId.matches(SYNTHETIC_CALL_ID_REGEX)) {
                                                             put("id", call.callId)
                                                         }
                                                     }
@@ -199,7 +200,7 @@ class GeminiToolAdapter(
                                             put("output", step.result)
                                         }
                                     )
-                                    if (!step.callId.startsWith("gemini_call_")) {
+                                    if (!step.callId.matches(SYNTHETIC_CALL_ID_REGEX)) {
                                         put("id", step.callId)
                                     }
                                 }
@@ -220,5 +221,9 @@ class GeminiToolAdapter(
         }
 
         return contents
+    }
+
+    companion object {
+        private val SYNTHETIC_CALL_ID_REGEX = Regex("""^gemini_call_.*_\d+$""")
     }
 }

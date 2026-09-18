@@ -593,4 +593,82 @@ class ProviderToolAdaptersTest {
         assertEquals("get_weather", calls[0].toolName)
         assertEquals("Berlin", calls[0].arguments["city"]?.jsonPrimitive?.content)
     }
+
+    @Test
+    fun `gemini stream accumulator preserves provider functionCall id and formats matching functionResponse`() = runTest {
+        val accumulator = GeminiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"id":"real_gemini_call_789","name":"search_places","args":{"query":"Tokyo"}}}]}}]}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(1, events.size)
+        val call = (events[0] as ModelRoundStreamEvent.ToolCalls).calls[0]
+        assertEquals("real_gemini_call_789", call.callId)
+        assertEquals("search_places", call.toolName)
+
+        // Verify subsequent functionResponse uses exactly that ID
+        val feedback = ModelRoundStep.ToolExecutionFeedback(
+            callId = call.callId,
+            toolName = call.toolName,
+            result = buildJsonObject { put("found", true) },
+        )
+        val stepContents = geminiAdapter.formatStepContents(listOf(feedback))
+        assertEquals(1, stepContents.size)
+        val funcResponse = stepContents[0]["parts"]?.jsonArray?.get(0)?.jsonObject?.get("functionResponse")?.jsonObject
+        assertNotNull(funcResponse)
+        assertEquals("real_gemini_call_789", funcResponse?.get("id")?.jsonPrimitive?.content)
+        assertEquals("search_places", funcResponse?.get("name")?.jsonPrimitive?.content)
+    }
+
+    @Test(expected = MalformedToolCallStreamException::class)
+    fun `openAi stream accumulator rejects truncated JSON arguments`() = runTest {
+        val accumulator = OpenAiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{\"query\":"}}]}}]}""",
+            """[DONE]""",
+        ).asFlow()
+        accumulator.accumulate(chunks).toList()
+    }
+
+    @Test(expected = MalformedToolCallStreamException::class)
+    fun `openAi stream accumulator rejects missing tool identity`() = runTest {
+        val accumulator = OpenAiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":1}"}}]}}]}""",
+            """[DONE]""",
+        ).asFlow()
+        accumulator.accumulate(chunks).toList()
+    }
+
+    @Test(expected = MalformedToolCallStreamException::class)
+    fun `anthropic stream accumulator rejects truncated JSON arguments`() = runTest {
+        val accumulator = AnthropicStreamAccumulator(json)
+        val chunks = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"lookup","input":{}}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"broken\":"}}""",
+            """{"type":"message_stop"}""",
+        ).asFlow()
+        accumulator.accumulate(chunks).toList()
+    }
+
+    @Test(expected = MalformedToolCallStreamException::class)
+    fun `anthropic stream accumulator rejects blank tool name`() = runTest {
+        val accumulator = AnthropicStreamAccumulator(json)
+        val chunks = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"","input":{}}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1}"}}""",
+            """{"type":"message_stop"}""",
+        ).asFlow()
+        accumulator.accumulate(chunks).toList()
+    }
+
+    @Test(expected = MalformedToolCallStreamException::class)
+    fun `gemini stream accumulator rejects blank tool name`() = runTest {
+        val accumulator = GeminiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"name":"","args":{}}}]}}]}""",
+        ).asFlow()
+        accumulator.accumulate(chunks).toList()
+    }
 }

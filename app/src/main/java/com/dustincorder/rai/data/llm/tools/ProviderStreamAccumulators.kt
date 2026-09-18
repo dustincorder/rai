@@ -11,8 +11,16 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.util.UUID
+
+/**
+ * Thrown when streamed tool-call payload is incomplete, truncated, or lacks required identity.
+ */
+class MalformedToolCallStreamException(
+    message: String,
+    cause: Throwable? = null,
+) : RuntimeException(message, cause)
 
 /**
  * Extracts visible text for user presentation from partially streamed output,
@@ -75,10 +83,24 @@ class OpenAiStreamAccumulator(private val json: Json) {
     fun onFinish(): ModelRoundStreamEvent {
         if (toolCallBuilders.isNotEmpty()) {
             val calls = toolCallBuilders.entries.sortedBy { it.key }.map { (_, b) ->
-                val argsObj = runCatching {
-                    json.parseToJsonElement(b.arguments.toString().ifBlank { "{}" }).jsonObject
-                }.getOrElse { buildJsonObject {} }
-                ToolCall(b.id.ifBlank { "call_${UUID.randomUUID()}" }, b.name, argsObj)
+                if (b.name.isBlank()) {
+                    throw MalformedToolCallStreamException("OpenAI tool call is missing a tool name.")
+                }
+                if (b.id.isBlank()) {
+                    throw MalformedToolCallStreamException("OpenAI tool call '${b.name}' is missing a required call ID.")
+                }
+                val rawArgs = b.arguments.toString()
+                if (rawArgs.isBlank()) {
+                    throw MalformedToolCallStreamException("OpenAI tool call '${b.name}' has empty or incomplete arguments.")
+                }
+                val parsedElement = runCatching {
+                    json.parseToJsonElement(rawArgs)
+                }.getOrElse { e ->
+                    throw MalformedToolCallStreamException("Streamed tool '${b.name}' arguments are not valid JSON: $rawArgs", e)
+                }
+                val argsObj = parsedElement as? JsonObject
+                    ?: throw MalformedToolCallStreamException("Streamed tool '${b.name}' arguments must be a JSON object, but was: $parsedElement")
+                ToolCall(b.id, b.name, argsObj, providerCorrelation = b.id)
             }
             return ModelRoundStreamEvent.ToolCalls(calls)
         }
@@ -159,10 +181,24 @@ class AnthropicStreamAccumulator(private val json: Json) {
     fun onFinish(): ModelRoundStreamEvent {
         if (toolCallBuilders.isNotEmpty()) {
             val calls = toolCallBuilders.entries.sortedBy { it.key }.map { (_, b) ->
-                val argsObj = runCatching {
-                    json.parseToJsonElement(b.arguments.toString().ifBlank { "{}" }).jsonObject
-                }.getOrElse { buildJsonObject {} }
-                ToolCall(b.id.ifBlank { "call_${UUID.randomUUID()}" }, b.name, argsObj)
+                if (b.name.isBlank()) {
+                    throw MalformedToolCallStreamException("Anthropic tool call is missing a tool name.")
+                }
+                if (b.id.isBlank()) {
+                    throw MalformedToolCallStreamException("Anthropic tool call '${b.name}' is missing a required tool_use ID.")
+                }
+                val rawArgs = b.arguments.toString()
+                if (rawArgs.isBlank()) {
+                    throw MalformedToolCallStreamException("Anthropic tool call '${b.name}' has empty or incomplete arguments.")
+                }
+                val parsedElement = runCatching {
+                    json.parseToJsonElement(rawArgs)
+                }.getOrElse { e ->
+                    throw MalformedToolCallStreamException("Streamed tool '${b.name}' arguments are not valid JSON: $rawArgs", e)
+                }
+                val argsObj = parsedElement as? JsonObject
+                    ?: throw MalformedToolCallStreamException("Streamed tool '${b.name}' arguments must be a JSON object, but was: $parsedElement")
+                ToolCall(b.id, b.name, argsObj, providerCorrelation = b.id)
             }
             return ModelRoundStreamEvent.ToolCalls(calls)
         }
@@ -197,9 +233,16 @@ class GeminiStreamAccumulator(private val json: Json) {
             val functionCall = partObj["functionCall"]?.jsonObject
             if (functionCall != null) {
                 val name = functionCall["name"]?.jsonPrimitive?.content.orEmpty()
-                val args = functionCall["args"]?.jsonObject ?: buildJsonObject {}
-                val callId = "gemini_call_${name}_${toolCalls.size}"
-                toolCalls.add(ToolCall(callId, name, args))
+                if (name.isBlank()) {
+                    throw MalformedToolCallStreamException("Gemini functionCall has a blank or missing name.")
+                }
+                val rawArgs = functionCall["args"]
+                if (rawArgs == null || rawArgs !is JsonObject) {
+                    throw MalformedToolCallStreamException("Gemini functionCall '$name' args must be a JsonObject.")
+                }
+                val providerId = functionCall["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+                val callId = providerId ?: "gemini_call_${name}_${toolCalls.size}"
+                toolCalls.add(ToolCall(callId, name, rawArgs, providerCorrelation = providerId))
             }
         }
         return events
