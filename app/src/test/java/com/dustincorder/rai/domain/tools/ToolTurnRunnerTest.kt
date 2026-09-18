@@ -1495,29 +1495,186 @@ class ToolTurnRunnerTest {
 
         assertTrue(resume is ToolTurnResult.Failed)
         val failed = resume as ToolTurnResult.Failed
-        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("не соответствует"))
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("не совпадает"))
         assertEquals(0, sensitiveTool.callCount)
     }
 
     @Test
-    fun `bounded consumed token store maintains capacity ceiling and expires entries`() {
-        val store = BoundedConsumedTokenStore(maxEntries = 5)
-        val now = System.currentTimeMillis()
+    fun `same tokenId with extended expiry fails`() = runTest {
+        val sensitiveTool = FakeTool(
+            ToolDefinition(ToolId("act_exp"), "act_exp", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
 
-        // Insert 5 tokens
-        for (i in 1..5) {
-            assertTrue(store.markConsumed("token_$i", now + 10_000L))
-        }
-        assertEquals(5, store.size())
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "act_exp", buildJsonObject { put("param", "v") })))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+        )
+        val turn1 = runner.runTurn(listOf(ConversationMessage(ConversationRole.User, "run")), 1, null, invoker)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
 
-        // Replaying any of them returns false
-        assertFalse(store.markConsumed("token_1", now + 10_000L))
+        val extendedExpiryToken = pending.token.copy(expiresAtMs = pending.token.expiresAtMs + 60_000L)
+        val resume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = extendedExpiryToken,
+        )
+        assertTrue(resume is ToolTurnResult.Failed)
+        val failed = resume as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("не совпадает"))
+        assertEquals(0, sensitiveTool.callCount)
+    }
 
-        // Inserting 6th token should evict eldest (token_1)
-        assertTrue(store.markConsumed("token_6", now + 10_000L))
-        assertEquals(5, store.size())
+    @Test
+    fun `same tokenId with modified claims fails`() = runTest {
+        val sensitiveTool = FakeTool(
+            ToolDefinition(ToolId("act_claims"), "act_claims", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
 
-        // token_1 was evicted so size is capped at 5
-        assertTrue(store.size() <= 5)
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "act_claims", buildJsonObject { put("param", "v") })))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+        )
+        val turn1 = runner.runTurn(listOf(ConversationMessage(ConversationRole.User, "run")), 1, null, invoker)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        val modifiedClaimsToken = pending.token.copy(turnEpoch = pending.token.turnEpoch + 1)
+        val resume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = modifiedClaimsToken,
+        )
+        assertTrue(resume is ToolTurnResult.Failed)
+        val failed = resume as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.ModelError && (failed.error as ToolTurnError.ModelError).message.contains("не совпадает"))
+        assertEquals(0, sensitiveTool.callCount)
+    }
+
+    @Test
+    fun `invalid token attempt does not consume or block valid pending token`() = runTest {
+        val sensitiveTool = FakeTool(
+            ToolDefinition(ToolId("act_retry"), "act_retry", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "act_retry", buildJsonObject { put("param", "v") })))),
+                listOf(ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm))),
+            ),
+        )
+        val turn1 = runner.runTurn(listOf(ConversationMessage(ConversationRole.User, "run")), 1, null, invoker)
+        val pending = (turn1 as ToolTurnResult.ConfirmationRequired).pending
+
+        // Invalid attempt with forged token
+        val forgedToken = pending.token.copy(tokenId = "forged-id")
+        val invalidResume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = forgedToken,
+        )
+        assertTrue(invalidResume is ToolTurnResult.Failed)
+        assertEquals(0, sensitiveTool.callCount)
+
+        // Valid attempt with exact pending.token still succeeds
+        val validResume = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+        assertTrue(validResume is ToolTurnResult.Completed)
+        assertEquals(1, sensitiveTool.callCount)
+
+        // Subsequent replay now fails
+        val replay = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+        assertTrue(replay is ToolTurnResult.Failed)
+        assertEquals(1, sensitiveTool.callCount)
+    }
+
+    @Test
+    fun `consuming another token does not make the previous token replayable`() {
+        var monotonicTime = 1000L
+        val store = BoundedConsumedTokenStore(clock = { monotonicTime }, maxEntries = 10)
+
+        assertTrue(store.markConsumed("token_A", monotonicTime + 10_000L))
+        assertTrue(store.markConsumed("token_B", monotonicTime + 10_000L))
+
+        // token_A was consumed and remains non-replayable
+        assertFalse(store.markConsumed("token_A", monotonicTime + 10_000L))
+        assertTrue(store.isConsumed("token_A"))
+        assertTrue(store.isConsumed("token_B"))
+    }
+
+    @Test
+    fun `wall-clock value is irrelevant for monotonic token consumption and expiry`() {
+        var monotonicTime = 5_000L
+        val store = BoundedConsumedTokenStore(clock = { monotonicTime }, maxEntries = 5)
+
+        assertTrue(store.markConsumed("token_1", 10_000L))
+        assertTrue(store.isConsumed("token_1"))
+
+        // Advance monotonic clock but still before expiration (10_000L)
+        monotonicTime = 8_000L
+        assertTrue(store.isConsumed("token_1"))
+        assertFalse(store.markConsumed("token_1", 10_000L))
+
+        // Advance monotonic clock past expiration
+        monotonicTime = 11_000L
+        assertFalse(store.isConsumed("token_1")) // Evicted as expired
+    }
+
+    @Test
+    fun `capacity pressure cannot make an unexpired consumed token replayable`() {
+        var monotonicTime = 1_000L
+        val store = BoundedConsumedTokenStore(clock = { monotonicTime }, maxEntries = 2)
+
+        // Fill store to capacity with unexpired tokens
+        assertTrue(store.markConsumed("token_1", 20_000L))
+        assertTrue(store.markConsumed("token_2", 20_000L))
+        assertEquals(2, store.size())
+
+        // Capacity pressure: attempting to add a 3rd token fails closed rather than evicting unexpired tokens
+        assertFalse(store.markConsumed("token_3", 20_000L))
+        assertEquals(2, store.size())
+
+        // Neither token_1 nor token_2 was evicted or became replayable
+        assertFalse(store.markConsumed("token_1", 20_000L))
+        assertFalse(store.markConsumed("token_2", 20_000L))
+        assertTrue(store.isConsumed("token_1"))
+        assertTrue(store.isConsumed("token_2"))
+        assertFalse(store.isConsumed("token_3"))
+
+        // Advance time past expiration: entries expire and can be replaced
+        monotonicTime = 25_000L
+        assertTrue(store.markConsumed("token_3", 30_000L))
+        assertEquals(1, store.size())
+        assertTrue(store.isConsumed("token_3"))
     }
 }

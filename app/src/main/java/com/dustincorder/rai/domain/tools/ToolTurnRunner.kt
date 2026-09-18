@@ -55,23 +55,36 @@ data class PendingToolConfirmation(
     val exposedTools: List<ToolDefinition> = emptyList(),
 )
 
-class BoundedConsumedTokenStore(private val maxEntries: Int = 128) {
+class BoundedConsumedTokenStore(
+    private val clock: MonotonicClock = MonotonicClock { System.nanoTime() / 1_000_000L },
+    private val maxEntries: Int = 128,
+) {
     private val lock = Any()
-    private val map = object : LinkedHashMap<String, Long>(maxEntries, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
-            return size > maxEntries
-        }
-    }
+    private val map = LinkedHashMap<String, Long>()
 
     fun markConsumed(tokenId: String, expiresAtMs: Long): Boolean = synchronized(lock) {
+        val nowMonotonic = clock.markMonotonicMs()
+        map.entries.removeIf { it.value <= nowMonotonic }
         if (map.containsKey(tokenId)) return false
-        val now = System.currentTimeMillis()
-        map.entries.removeIf { it.value < now }
+
+        if (map.size >= maxEntries) {
+            return false
+        }
         map[tokenId] = expiresAtMs
         return true
     }
 
-    fun size(): Int = synchronized(lock) { map.size }
+    fun isConsumed(tokenId: String): Boolean = synchronized(lock) {
+        val nowMonotonic = clock.markMonotonicMs()
+        map.entries.removeIf { it.value <= nowMonotonic }
+        return map.containsKey(tokenId)
+    }
+
+    fun size(): Int = synchronized(lock) {
+        val nowMonotonic = clock.markMonotonicMs()
+        map.entries.removeIf { it.value <= nowMonotonic }
+        map.size
+    }
 }
 
 sealed interface ToolTurnError {
@@ -89,7 +102,7 @@ class ToolTurnRunner(
     private val budget: ToolLoopBudget = ToolLoopBudget(),
     private val monotonicClock: MonotonicClock = MonotonicClock { System.nanoTime() / 1_000_000L },
     private val now: () -> Long = { System.currentTimeMillis() },
-    private val consumedTokenStore: BoundedConsumedTokenStore = BoundedConsumedTokenStore(),
+    private val consumedTokenStore: BoundedConsumedTokenStore = BoundedConsumedTokenStore(monotonicClock),
 ) {
 
     suspend fun runTurn(
@@ -241,15 +254,9 @@ class ToolTurnRunner(
         var round = pending.round
         var totalCallsRequested = pending.totalCallsRequested
 
-        if (confirmationToken.tokenId != pending.token.tokenId) {
+        if (confirmationToken != pending.token) {
             return ToolTurnResult.Failed(
-                ToolTurnError.ModelError("Действие отклонено: токен подтверждения не соответствует ожидаемому.")
-            )
-        }
-
-        if (!consumedTokenStore.markConsumed(confirmationToken.tokenId, confirmationToken.expiresAtMs)) {
-            return ToolTurnResult.Failed(
-                ToolTurnError.ModelError("Действие отклонено: токен подтверждения уже был использован.")
+                ToolTurnError.ModelError("Действие отклонено: токен подтверждения не совпадает с ожидаемым токеном.")
             )
         }
 
@@ -260,7 +267,7 @@ class ToolTurnRunner(
         if (tool.definition.id != pending.definition.id ||
             tool.definition.name != pending.call.toolName ||
             tool.definition.executionKind != pending.definition.executionKind ||
-            !confirmationToken.isValidFor(
+            !pending.token.isValidFor(
                 tool.definition.id,
                 tool.definition.executionKind,
                 pending.call.arguments,
@@ -270,6 +277,12 @@ class ToolTurnRunner(
         ) {
             return ToolTurnResult.Failed(
                 ToolTurnError.ModelError("Действие отклонено: определение инструмента изменилось или токен недействителен.")
+            )
+        }
+
+        if (!consumedTokenStore.markConsumed(pending.token.tokenId, pending.token.expiresAtMs)) {
+            return ToolTurnResult.Failed(
+                ToolTurnError.ModelError("Действие отклонено: токен подтверждения уже был использован.")
             )
         }
 
@@ -293,6 +306,7 @@ class ToolTurnRunner(
                         pending.call.callId,
                         pending.call.toolName,
                         confirmedProjected,
+                        providerCorrelation = pending.call.providerCorrelation,
                     )
                 )
 
@@ -481,7 +495,7 @@ class ToolTurnRunner(
             )
             val projected = projector.project(errorResult, budget.maxResultBytes)
             return CallProcessOutcome.Feedback(
-                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
             )
         }
 
@@ -493,7 +507,7 @@ class ToolTurnRunner(
             )
             val projected = projector.project(errorResult, budget.maxResultBytes)
             return CallProcessOutcome.Feedback(
-                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
             )
         }
 
@@ -504,7 +518,7 @@ class ToolTurnRunner(
             )
             val projected = projector.project(errorResult, budget.maxResultBytes)
             return CallProcessOutcome.Feedback(
-                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
             )
         }
 
@@ -517,7 +531,7 @@ class ToolTurnRunner(
             )
             val projected = projector.project(errorResult, budget.maxResultBytes)
             return CallProcessOutcome.Feedback(
-                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
             )
         }
 
@@ -536,7 +550,7 @@ class ToolTurnRunner(
                 )
                 val projected = projector.project(errorResult, budget.maxResultBytes)
                 CallProcessOutcome.Feedback(
-                    ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                    ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
                 )
             }
             is ToolPolicyDecision.RequiresConfirmation -> {
@@ -555,7 +569,7 @@ class ToolTurnRunner(
                 )
                 val projected = projector.project(execResult, budget.maxResultBytes)
                 CallProcessOutcome.Feedback(
-                    ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                    ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected, providerCorrelation = call.providerCorrelation)
                 )
             }
         }

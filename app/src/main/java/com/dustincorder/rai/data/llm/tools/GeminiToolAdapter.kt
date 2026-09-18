@@ -146,6 +146,15 @@ class GeminiToolAdapter(
         val contents = mutableListOf<JsonObject>()
         var currentResponses = mutableListOf<JsonObject>()
 
+        val callCorrelationMap = mutableMapOf<String, String>()
+        steps.filterIsInstance<ModelRoundStep.AssistantToolCalls>().forEach { assistantCalls ->
+            assistantCalls.calls.forEach { call ->
+                call.providerCorrelation?.let { correlation ->
+                    callCorrelationMap[call.callId] = correlation
+                }
+            }
+        }
+
         steps.forEach { step ->
             when (step) {
                 is ModelRoundStep.AssistantToolCalls -> {
@@ -173,8 +182,8 @@ class GeminiToolAdapter(
                                                     buildJsonObject {
                                                         put("name", call.toolName)
                                                         put("args", call.arguments)
-                                                        if (!call.callId.matches(SYNTHETIC_CALL_ID_REGEX)) {
-                                                            put("id", call.callId)
+                                                        if (call.providerCorrelation != null) {
+                                                            put("id", call.providerCorrelation)
                                                         }
                                                     }
                                                 )
@@ -188,6 +197,7 @@ class GeminiToolAdapter(
                 }
 
                 is ModelRoundStep.ToolExecutionFeedback -> {
+                    val correlationId = step.providerCorrelation ?: callCorrelationMap[step.callId]
                     currentResponses.add(
                         buildJsonObject {
                             put(
@@ -200,8 +210,8 @@ class GeminiToolAdapter(
                                             put("output", step.result)
                                         }
                                     )
-                                    if (!step.callId.matches(SYNTHETIC_CALL_ID_REGEX)) {
-                                        put("id", step.callId)
+                                    if (correlationId != null) {
+                                        put("id", correlationId)
                                     }
                                 }
                             )
@@ -221,9 +231,5 @@ class GeminiToolAdapter(
         }
 
         return contents
-    }
-
-    companion object {
-        private val SYNTHETIC_CALL_ID_REGEX = Regex("""^gemini_call_.*_\d+$""")
     }
 }

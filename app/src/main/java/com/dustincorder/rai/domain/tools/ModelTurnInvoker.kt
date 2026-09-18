@@ -31,5 +31,6 @@ sealed interface ModelRoundStep {
         val callId: String,
         val toolName: String,
         val result: JsonObject,
+        val providerCorrelation: String? = null,
     ) : ModelRoundStep
 }

@@ -21,6 +21,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -210,7 +211,7 @@ class ProviderToolAdaptersTest {
 
     @Test
     fun `gemini adapter formats step contents with role model and user functionResponse`() {
-        val call = ToolCall("call_xyz", "search_tool", buildJsonObject { put("query", "test") })
+        val call = ToolCall("call_xyz", "search_tool", buildJsonObject { put("query", "test") }, providerCorrelation = "call_xyz")
         val resultData = buildJsonObject { put("matches", 5) }
         val steps = listOf(
             ModelRoundStep.AssistantToolCalls(listOf(call)),
@@ -606,12 +607,14 @@ class ProviderToolAdaptersTest {
         val call = (events[0] as ModelRoundStreamEvent.ToolCalls).calls[0]
         assertEquals("real_gemini_call_789", call.callId)
         assertEquals("search_places", call.toolName)
+        assertEquals("real_gemini_call_789", call.providerCorrelation)
 
         // Verify subsequent functionResponse uses exactly that ID
         val feedback = ModelRoundStep.ToolExecutionFeedback(
             callId = call.callId,
             toolName = call.toolName,
             result = buildJsonObject { put("found", true) },
+            providerCorrelation = call.providerCorrelation,
         )
         val stepContents = geminiAdapter.formatStepContents(listOf(feedback))
         assertEquals(1, stepContents.size)
@@ -619,6 +622,78 @@ class ProviderToolAdaptersTest {
         assertNotNull(funcResponse)
         assertEquals("real_gemini_call_789", funcResponse?.get("id")?.jsonPrimitive?.content)
         assertEquals("search_places", funcResponse?.get("name")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `gemini echoes back provider ID even when matching synthetic format`() = runTest {
+        val accumulator = GeminiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"id":"gemini_call_search_0","name":"search","args":{"query":"test"}}}]}}]}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(1, events.size)
+        val call = (events[0] as ModelRoundStreamEvent.ToolCalls).calls[0]
+        assertEquals("gemini_call_search_0", call.callId)
+        assertEquals("gemini_call_search_0", call.providerCorrelation)
+
+        val steps = listOf(
+            ModelRoundStep.AssistantToolCalls(listOf(call)),
+            ModelRoundStep.ToolExecutionFeedback(
+                callId = call.callId,
+                toolName = call.toolName,
+                result = buildJsonObject { put("found", true) },
+                providerCorrelation = call.providerCorrelation,
+            ),
+        )
+        val stepContents = geminiAdapter.formatStepContents(steps)
+        assertEquals(2, stepContents.size)
+
+        // Verify AssistantToolCalls (model role) echoes back functionCall with id="gemini_call_search_0"
+        val modelFuncCall = stepContents[0]["parts"]?.jsonArray?.get(0)?.jsonObject?.get("functionCall")?.jsonObject
+        assertNotNull(modelFuncCall)
+        assertEquals("gemini_call_search_0", modelFuncCall?.get("id")?.jsonPrimitive?.content)
+
+        // Verify ToolExecutionFeedback (user role) echoes back functionResponse with id="gemini_call_search_0"
+        val userFuncResponse = stepContents[1]["parts"]?.jsonArray?.get(0)?.jsonObject?.get("functionResponse")?.jsonObject
+        assertNotNull(userFuncResponse)
+        assertEquals("gemini_call_search_0", userFuncResponse?.get("id")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `gemini omits id when provider omitted id and synthetic id was generated`() = runTest {
+        val accumulator = GeminiStreamAccumulator(json)
+        val chunks = listOf(
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"query":"test"}}}]}}]}""",
+        ).asFlow()
+
+        val events = accumulator.accumulate(chunks).toList()
+        assertEquals(1, events.size)
+        val call = (events[0] as ModelRoundStreamEvent.ToolCalls).calls[0]
+        assertNull(call.providerCorrelation)
+        assertTrue(call.callId.startsWith("gemini_call_search_"))
+
+        val steps = listOf(
+            ModelRoundStep.AssistantToolCalls(listOf(call)),
+            ModelRoundStep.ToolExecutionFeedback(
+                callId = call.callId,
+                toolName = call.toolName,
+                result = buildJsonObject { put("found", true) },
+                providerCorrelation = call.providerCorrelation,
+            ),
+        )
+        val stepContents = geminiAdapter.formatStepContents(steps)
+        assertEquals(2, stepContents.size)
+
+        // Verify AssistantToolCalls does NOT contain id
+        val modelFuncCall = stepContents[0]["parts"]?.jsonArray?.get(0)?.jsonObject?.get("functionCall")?.jsonObject
+        assertNotNull(modelFuncCall)
+        assertNull(modelFuncCall?.get("id"))
+
+        // Verify ToolExecutionFeedback does NOT contain id
+        val userFuncResponse = stepContents[1]["parts"]?.jsonArray?.get(0)?.jsonObject?.get("functionResponse")?.jsonObject
+        assertNotNull(userFuncResponse)
+        assertNull(userFuncResponse?.get("id"))
     }
 
     @Test(expected = MalformedToolCallStreamException::class)
