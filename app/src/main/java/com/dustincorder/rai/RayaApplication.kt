@@ -66,6 +66,18 @@ class RayaApplication : Application() {
             gemini = GeminiReplyProvider(httpClient, json),
         )
     }
+    val toolRegistry: com.dustincorder.rai.domain.tools.ToolRegistry by lazy {
+        com.dustincorder.rai.domain.tools.InMemoryToolRegistry()
+    }
+    val jsonSchemaValidator: com.dustincorder.rai.domain.tools.JsonSchemaValidator by lazy {
+        com.dustincorder.rai.data.tools.HarrelJsonSchemaValidator()
+    }
+    val toolTurnRunner: com.dustincorder.rai.domain.tools.ToolTurnRunner by lazy {
+        com.dustincorder.rai.domain.tools.ToolTurnRunner(
+            registry = toolRegistry,
+            schemaValidator = jsonSchemaValidator,
+        )
+    }
 
     private val runtimeScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
 

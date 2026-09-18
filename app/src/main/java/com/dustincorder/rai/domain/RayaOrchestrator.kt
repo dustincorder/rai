@@ -15,6 +15,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
+import com.dustincorder.rai.domain.tools.ActionConfirmationToken
+import com.dustincorder.rai.domain.tools.ModelTurnInvoker
+import com.dustincorder.rai.domain.tools.PendingToolConfirmation
+import com.dustincorder.rai.domain.tools.ToolRegistry
+import com.dustincorder.rai.domain.tools.ToolTurnError
+import com.dustincorder.rai.domain.tools.ToolTurnResult
+import com.dustincorder.rai.domain.tools.ToolTurnRunner
 import java.util.Locale
 
 fun interface RayaRoutingDiagnostics {
@@ -46,6 +53,8 @@ class RayaOrchestrator(
     private val voiceDiagnostics: RayaVoiceDiagnostics = RayaVoiceDiagnostics { },
     private val now: () -> Long = { System.currentTimeMillis() },
     private val inactivityTimeoutMs: () -> Long = { USER_INACTIVITY_TIMEOUT_MS },
+    private val toolTurnRunner: ToolTurnRunner? = null,
+    private val toolRegistry: ToolRegistry? = null,
 ) : ConversationOwner {
     private val _state = MutableStateFlow<RayaState>(RayaState.Idle)
     val state: StateFlow<RayaState> = _state.asStateFlow()
@@ -55,6 +64,9 @@ class RayaOrchestrator(
 
     private val _conversation = MutableStateFlow<List<ConversationMessage>>(emptyList())
     override val conversation: StateFlow<List<ConversationMessage>> = _conversation.asStateFlow()
+
+    private val _pendingToolConfirmation = MutableStateFlow<PendingToolConfirmation?>(null)
+    val pendingToolConfirmation: StateFlow<PendingToolConfirmation?> = _pendingToolConfirmation.asStateFlow()
 
     private val _interactionMode = MutableStateFlow(InteractionMode.Text)
     val interactionMode: StateFlow<InteractionMode> = _interactionMode.asStateFlow()
@@ -103,13 +115,52 @@ class RayaOrchestrator(
         val languageTag: String? = null
         markUserTurnIntent()
         textTurnInFlight = true
+        turnEpoch++
+        _pendingToolConfirmation.value = null
         scope.launch {
             try {
                 _conversation.value = appendMessage(ConversationMessage(ConversationRole.User, clean))
                 _state.value = RayaState.Thinking
                 _streamingText.value = ""
+                val currentEpoch = turnEpoch
                 try {
-                    val response = collectReply(conversationContext(), languageTag)
+                    val activeTools = toolRegistry?.activeTools().orEmpty()
+                    val response = if (toolTurnRunner != null && activeTools.isNotEmpty() && replyProvider is ModelTurnInvoker) {
+                        var firstToken = true
+                        val startedAt = now()
+                        when (val turnResult = toolTurnRunner.runTurn(
+                            messages = conversationContext(),
+                            turnEpoch = currentEpoch,
+                            languageTag = languageTag,
+                            modelInvoker = replyProvider,
+                            onTextDelta = { delta ->
+                                if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                                if (firstToken) {
+                                    firstToken = false
+                                    record("llm.firstTokenMs=${now() - startedAt}")
+                                }
+                                _streamingText.value += delta
+                            },
+                        )) {
+                            is ToolTurnResult.Completed -> turnResult.response
+                            is ToolTurnResult.ConfirmationRequired -> {
+                                _pendingToolConfirmation.value = turnResult.pending
+                                _state.value = RayaState.Idle
+                                return@launch
+                            }
+                            is ToolTurnResult.Failed -> {
+                                val message = when (val err = turnResult.error) {
+                                    is ToolTurnError.TurnTimeout -> "Время ожидания ответа истекло."
+                                    is ToolTurnError.RoundBudgetExceeded -> "Превышен лимит раундов выполнения действий."
+                                    is ToolTurnError.CallBudgetExceeded -> "Превышен лимит количества действий."
+                                    is ToolTurnError.ModelError -> err.message
+                                }
+                                throw IllegalStateException(message)
+                            }
+                        }
+                    } else {
+                        collectReply(conversationContext(), languageTag)
+                    }
                     if (_voiceSessionActive.value) return@launch
                     if (!textTurnInFlight) return@launch
                     _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
@@ -132,6 +183,84 @@ class RayaOrchestrator(
                 textTurnInFlight = false
             }
         }
+    }
+
+    fun confirmPendingTool(token: ActionConfirmationToken) {
+        val pending = _pendingToolConfirmation.value ?: return
+        if (pending.token.tokenId != token.tokenId) return
+        if (_voiceSessionActive.value || textTurnInFlight) return
+        _pendingToolConfirmation.value = null
+        textTurnInFlight = true
+        scope.launch {
+            try {
+                _state.value = RayaState.Thinking
+                _streamingText.value = ""
+                val currentEpoch = turnEpoch
+                try {
+                    val response = if (toolTurnRunner != null && replyProvider is ModelTurnInvoker) {
+                        var firstToken = true
+                        val startedAt = now()
+                        when (val turnResult = toolTurnRunner.resumeConfirmedTurn(
+                            messages = conversationContext(),
+                            turnEpoch = currentEpoch,
+                            languageTag = null,
+                            modelInvoker = replyProvider,
+                            pending = pending,
+                            confirmationToken = token,
+                            onTextDelta = { delta ->
+                                if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                                if (firstToken) {
+                                    firstToken = false
+                                    record("llm.firstTokenMs=${now() - startedAt}")
+                                }
+                                _streamingText.value += delta
+                            },
+                        )) {
+                            is ToolTurnResult.Completed -> turnResult.response
+                            is ToolTurnResult.ConfirmationRequired -> {
+                                _pendingToolConfirmation.value = turnResult.pending
+                                _state.value = RayaState.Idle
+                                return@launch
+                            }
+                            is ToolTurnResult.Failed -> {
+                                val message = when (val err = turnResult.error) {
+                                    is ToolTurnError.TurnTimeout -> "Время ожидания ответа истекло."
+                                    is ToolTurnError.RoundBudgetExceeded -> "Превышен лимит раундов выполнения действий."
+                                    is ToolTurnError.CallBudgetExceeded -> "Превышен лимит количества действий."
+                                    is ToolTurnError.ModelError -> err.message
+                                }
+                                throw IllegalStateException(message)
+                            }
+                        }
+                    } else {
+                        collectReply(conversationContext(), null)
+                    }
+                    if (_voiceSessionActive.value || !textTurnInFlight) return@launch
+                    _lastResponseLanguageTag.value = response.languageTag?.takeIf { it.isValidLanguageTag() }
+                    _semanticEmotion.value = response.emotion
+                    _streamingText.value = ""
+                    _conversation.value = appendMessage(ConversationMessage(ConversationRole.Assistant, response.text))
+                    _state.value = RayaState.Idle
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    if (textTurnInFlight) {
+                        _streamingText.value = ""
+                        _state.value = RayaState.Error(
+                            failure.message.orEmpty(),
+                            RayaErrorCode.ReplyUnavailable,
+                        )
+                    }
+                }
+            } finally {
+                textTurnInFlight = false
+            }
+        }
+    }
+
+    fun rejectPendingTool() {
+        turnEpoch++
+        _pendingToolConfirmation.value = null
     }
 
     /**
@@ -204,6 +333,7 @@ class RayaOrchestrator(
         if (_state.value is RayaState.Error) {
             _state.value = RayaState.Idle
         }
+        _pendingToolConfirmation.value = null
         _voiceSessionActive.value = true
         _microphoneEnabled.value = true
         _interactionMode.value = InteractionMode.Voice
@@ -285,6 +415,8 @@ class RayaOrchestrator(
     fun clearConversation() {
         if (_voiceSessionActive.value) return
         if (textTurnInFlight) return
+        turnEpoch++
+        _pendingToolConfirmation.value = null
         _conversation.value = emptyList()
         _semanticEmotion.value = RayaEmotion.Calm
         _lastResponseLanguageTag.value = null
@@ -294,6 +426,8 @@ class RayaOrchestrator(
 
     override fun replaceConversation(messages: List<ConversationMessage>): Boolean {
         if (_voiceSessionActive.value || textTurnInFlight) return false
+        turnEpoch++
+        _pendingToolConfirmation.value = null
         _conversation.value = messages
         _semanticEmotion.value = RayaEmotion.Calm
         _lastResponseLanguageTag.value = null
@@ -444,7 +578,43 @@ class RayaOrchestrator(
                 localNameResponse(resolvedLanguageTag)
             } else {
                 _streamingText.value = ""
-                collectVoiceReply(conversationContext(), resolvedLanguageTag, epoch)
+                val activeTools = toolRegistry?.activeTools().orEmpty()
+                if (toolTurnRunner != null && activeTools.isNotEmpty() && replyProvider is ModelTurnInvoker) {
+                    var firstToken = true
+                    val startedAt = now()
+                    when (val turnResult = toolTurnRunner.runTurn(
+                        messages = conversationContext(),
+                        turnEpoch = epoch,
+                        languageTag = resolvedLanguageTag,
+                        modelInvoker = replyProvider,
+                        onTextDelta = { delta ->
+                            if (isStaleEpoch(epoch, "replyDelta")) throw StaleTurn()
+                            if (firstToken) {
+                                firstToken = false
+                                record("voice.llmFirstTokenMs=${now() - startedAt} epoch=$epoch")
+                            }
+                            _streamingText.value += delta
+                        },
+                    )) {
+                        is ToolTurnResult.Completed -> turnResult.response
+                        is ToolTurnResult.ConfirmationRequired -> {
+                            _pendingToolConfirmation.value = turnResult.pending
+                            endVoiceSessionInternal(notice = false, reason = "confirmationRequired")
+                            return
+                        }
+                        is ToolTurnResult.Failed -> {
+                            val message = when (val err = turnResult.error) {
+                                is ToolTurnError.TurnTimeout -> "Время ожидания ответа истекло."
+                                is ToolTurnError.RoundBudgetExceeded -> "Превышен лимит раундов выполнения действий."
+                                is ToolTurnError.CallBudgetExceeded -> "Превышен лимит количества действий."
+                                is ToolTurnError.ModelError -> err.message
+                            }
+                            throw IllegalStateException(message)
+                        }
+                    }
+                } else {
+                    collectVoiceReply(conversationContext(), resolvedLanguageTag, epoch)
+                }
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -532,7 +702,10 @@ class RayaOrchestrator(
 
     private fun endVoiceSessionInternal(notice: Boolean, reason: String) {
         val wasActive = _voiceSessionActive.value
-        turnEpoch++
+        if (reason != "confirmationRequired") {
+            turnEpoch++
+            _pendingToolConfirmation.value = null
+        }
         sessionJob?.cancel()
         sessionJob = null
         speechRecognition.cancel()

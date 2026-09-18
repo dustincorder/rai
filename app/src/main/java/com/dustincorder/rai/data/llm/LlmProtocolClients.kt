@@ -10,6 +10,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -85,6 +87,36 @@ class OpenAiCompatibleReplyProvider(
             }.getOrNull()
         }.filter { it.isNotEmpty() }
     }
+    fun streamPayload(
+        baseUrl: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): Flow<String> {
+        val streamPayload = kotlinx.serialization.json.buildJsonObject {
+            payload.forEach { (k, v) -> put(k, v) }
+            put("stream", true)
+        }
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("chat", "completions")))
+            .post(streamPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "text/event-stream")
+            .apply { if (!apiKey.isNullOrBlank()) header("Authorization", "Bearer $apiKey") }
+            .build()
+        return client.streamPostLines(request, json)
+    }
+
+    suspend fun executePayload(
+        baseUrl: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): String {
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("chat", "completions")))
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .apply { if (!apiKey.isNullOrBlank()) header("Authorization", "Bearer $apiKey") }
+            .build()
+        return client.await(request, json)
+    }
 }
 
 class AnthropicCompatibleReplyProvider(
@@ -117,9 +149,42 @@ class AnthropicCompatibleReplyProvider(
             .firstOrNull { it.type == "text" }?.text?.takeIf { it.isNotBlank() }
             ?: error("Провайдер вернул пустой ответ.")
     }
+
+    fun streamPayload(
+        baseUrl: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): Flow<String> {
+        val streamPayload = kotlinx.serialization.json.buildJsonObject {
+            payload.forEach { (k, v) -> put(k, v) }
+            put("stream", true)
+        }
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("messages")))
+            .post(streamPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "text/event-stream")
+            .header("anthropic-version", "2023-06-01")
+            .apply { if (!apiKey.isNullOrBlank()) header("x-api-key", apiKey) }
+            .build()
+        return client.streamPostLines(request, json)
+    }
+
+    suspend fun executePayload(
+        baseUrl: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): String {
+        val request = Request.Builder()
+            .url(resolveEndpointUrl(baseUrl, listOf("messages")))
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("anthropic-version", "2023-06-01")
+            .apply { if (!apiKey.isNullOrBlank()) header("x-api-key", apiKey) }
+            .build()
+        return client.await(request, json)
+    }
 }
 
-private val ConversationRole.transport: String
+internal val ConversationRole.transport: String
     get() = when (this) {
         ConversationRole.User -> "user"
         ConversationRole.Assistant -> "assistant"

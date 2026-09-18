@@ -94,6 +94,32 @@ class GeminiReplyProvider(
         return text ?: error("Провайдер вернул пустой ответ.")
     }
 
+    suspend fun executePayload(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): String {
+        val url = "${baseUrl.trimEnd('/')}/models/$model:generateContent"
+        return client.postJson(url, payload.toString(), apiKey)
+    }
+
+    fun streamPayload(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        payload: kotlinx.serialization.json.JsonObject,
+    ): Flow<String> {
+        val url = "${baseUrl.trimEnd('/')}/models/$model:streamGenerateContent?alt=sse"
+        val request = Request.Builder()
+            .url(url)
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Accept", "text/event-stream")
+            .apply { if (!apiKey.isNullOrBlank()) header("x-goog-api-key", apiKey) }
+            .build()
+        return client.streamPostLines(request, json)
+    }
+
     /** Streams raw SSE content chunks for [ReplyStreaming.toReplyEvents]. */
     fun streamRaw(
         baseUrl: String,

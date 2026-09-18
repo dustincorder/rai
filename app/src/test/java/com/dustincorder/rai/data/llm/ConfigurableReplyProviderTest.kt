@@ -12,12 +12,22 @@ import com.dustincorder.rai.domain.ConversationRole
 import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaResponse
 import com.dustincorder.rai.domain.ReplyEvent
+import com.dustincorder.rai.domain.tools.ExecutionKind
+import com.dustincorder.rai.domain.tools.ModelRoundStreamEvent
+import com.dustincorder.rai.domain.tools.ToolDefinition
+import com.dustincorder.rai.domain.tools.ToolEffect
+import com.dustincorder.rai.domain.tools.ToolId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -26,6 +36,7 @@ import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -388,6 +399,160 @@ class ConfigurableReplyProviderTest {
         assertEquals(2, events.size)
         val completed = events.last() as ReplyEvent.Completed
         assertEquals("Hi", completed.response.text)
+    }
+
+    @Test
+    fun `streamRound emits multiple TextDeltas before Completed for streamed reply`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        keyStore.storedKey = "key"
+        val sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{\"content\":\"world!\"}}]}\n\n" +
+            "data: [DONE]\n\n"
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(sseBody),
+        )
+
+        val events = provider.streamRound(
+            messages = userMsg("hi"),
+            candidateTools = emptyList(),
+            steps = emptyList(),
+            languageTag = "en-US",
+        ).toList()
+
+        // First event is ExposedTools
+        assertTrue(events[0] is ModelRoundStreamEvent.ExposedTools)
+        val textDeltas = events.filterIsInstance<ModelRoundStreamEvent.TextDelta>()
+        assertTrue("Expected more than one TextDelta, got ${textDeltas.size}", textDeltas.size > 1)
+        assertEquals("Hello ", textDeltas[0].text)
+        assertEquals("world!", textDeltas[1].text)
+
+        val completed = events.last() as ModelRoundStreamEvent.Completed
+        assertEquals("Hello world!", completed.response.text)
+    }
+
+    @Test
+    fun `settings lookup failure exposes zero tools and fails closed`() = runTest {
+        val failingRepo = object : SettingsRepository {
+            override val settings: Flow<AppSettings> = flow { error("Disk read failed") }
+            override val modelCache: Flow<Map<String, List<String>>> = emptyFlow()
+            override suspend fun save(settings: AppSettings) {}
+            override suspend fun saveModelCache(providerName: String, modelIds: List<String>) {}
+            override suspend fun currentLanguage() = ConversationLanguage.Auto
+        }
+        val p = ConfigurableReplyProvider(
+            failingRepo,
+            keyStore,
+            OpenAiCompatibleReplyProvider(OkHttpClient(), Json { ignoreUnknownKeys = true }),
+            AnthropicCompatibleReplyProvider(OkHttpClient(), Json { ignoreUnknownKeys = true }),
+            GeminiReplyProvider(OkHttpClient(), Json { ignoreUnknownKeys = true }),
+            { "System" },
+        )
+        val tool = ToolDefinition(
+            id = ToolId("tool_1"),
+            name = "search",
+            description = "search",
+            effect = ToolEffect.ReadOnly,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = buildJsonObject { put("type", "object") },
+        )
+        val emittedEvents = mutableListOf<ModelRoundStreamEvent>()
+        val failure = runCatching {
+            p.streamRound(
+                messages = userMsg("hi"),
+                candidateTools = listOf(tool),
+                steps = emptyList(),
+                languageTag = "en-US",
+            ).collect { emittedEvents.add(it) }
+        }.exceptionOrNull()
+
+        assertTrue("Expected failure on settings read", failure is LlmConfigurationException)
+        val exposed = emittedEvents.filterIsInstance<ModelRoundStreamEvent.ExposedTools>().firstOrNull()
+        assertNotNull("Must emit ExposedTools even on failure", exposed)
+        assertTrue("Settings failure must expose 0 tools (fail closed)", exposed!!.tools.isEmpty())
+    }
+
+    @Test
+    fun `unsupported schema tool is omitted from exposed tools`() = runTest {
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"),
+        )
+        val unsupportedTool = ToolDefinition(
+            id = ToolId("bad_tool"),
+            name = "bad",
+            description = "bad schema",
+            effect = ToolEffect.ReadOnly,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = buildJsonObject { put("type", "string") }, // invalid root schema for OpenAI
+        )
+        val events = provider.streamRound(
+            messages = userMsg("hi"),
+            candidateTools = listOf(unsupportedTool),
+            steps = emptyList(),
+            languageTag = "en-US",
+        ).toList()
+
+        val exposed = events.filterIsInstance<ModelRoundStreamEvent.ExposedTools>().first()
+        assertTrue("Unsupported schema must be omitted from exposed tools", exposed.tools.isEmpty())
+    }
+
+    @Test
+    fun `provider change between calls updates exact round tool exposure`() = runTest {
+        val defsTool = ToolDefinition(
+            id = ToolId("defs_tool"),
+            name = "defs_tool",
+            description = "Tool with defs",
+            effect = ToolEffect.ReadOnly,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = buildJsonObject {
+                put("type", "object")
+                put("\$defs", buildJsonObject {
+                    put("Item", buildJsonObject { put("type", "string") })
+                })
+                put("properties", buildJsonObject {
+                    put("val", buildJsonObject { put("\$ref", JsonPrimitive("#/\$defs/Item")) })
+                })
+            },
+        )
+
+        // Round 1: OpenAI
+        repository.save(custom(LlmProtocol.OpenAiCompatible))
+        keyStore.storedKey = "key"
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"),
+        )
+        val events1 = provider.streamRound(
+            messages = userMsg("hi"),
+            candidateTools = listOf(defsTool),
+            steps = emptyList(),
+            languageTag = "en-US",
+        ).toList()
+        val exposed1 = events1.filterIsInstance<ModelRoundStreamEvent.ExposedTools>().first()
+        assertEquals(1, exposed1.tools.size)
+        assertEquals("defs_tool", exposed1.tools[0].name)
+
+        // Switch to Gemini protocol
+        repository.save(custom(LlmProtocol.Gemini))
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]}}]}\n\n"),
+        )
+        val events2 = provider.streamRound(
+            messages = userMsg("hi"),
+            candidateTools = listOf(defsTool),
+            steps = emptyList(),
+            languageTag = "en-US",
+        ).toList()
+        val exposed2 = events2.filterIsInstance<ModelRoundStreamEvent.ExposedTools>().first()
+        assertTrue("Gemini does not support \$defs, so it must be omitted", exposed2.tools.isEmpty())
     }
 
     private fun custom(protocol: LlmProtocol) = AppSettings(

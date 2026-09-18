@@ -22,6 +22,26 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
+import com.dustincorder.rai.data.llm.tools.AnthropicStreamAccumulator
+import com.dustincorder.rai.data.llm.tools.AnthropicToolAdapter
+import com.dustincorder.rai.data.llm.tools.GeminiStreamAccumulator
+import com.dustincorder.rai.data.llm.tools.GeminiToolAdapter
+import com.dustincorder.rai.data.llm.tools.MalformedToolCallStreamException
+import com.dustincorder.rai.data.llm.tools.OpenAiStreamAccumulator
+import com.dustincorder.rai.data.llm.tools.OpenAiToolAdapter
+import com.dustincorder.rai.domain.tools.ModelRoundStep
+import com.dustincorder.rai.domain.tools.ModelRoundStreamEvent
+import com.dustincorder.rai.domain.tools.ModelTurnInvoker
+import com.dustincorder.rai.domain.tools.ProviderSchemaProjection
+import com.dustincorder.rai.domain.tools.ProviderSchemaProjector
+import com.dustincorder.rai.domain.tools.ToolDefinition
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+
 class ConfigurableReplyProvider(
     private val settingsRepository: SettingsRepository,
     private val apiKeyStore: ApiKeyStore,
@@ -30,7 +50,7 @@ class ConfigurableReplyProvider(
     private val gemini: GeminiReplyProvider,
     private val systemPrompt: () -> String,
     private val json: Json = Json { ignoreUnknownKeys = true },
-) : ReplyProvider, ChatTitleGenerator {
+) : ReplyProvider, ChatTitleGenerator, ModelTurnInvoker {
     override suspend fun reply(messages: List<ConversationMessage>, languageTag: String?): RayaResponse {
         if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
         val settings = settingsRepository.settings.first()
@@ -115,6 +135,183 @@ class ConfigurableReplyProvider(
             emitAll(raw.toReplyEvents(json))
         } catch (cancellation: CancellationException) {
             throw cancellation
+        } catch (failure: Throwable) {
+            logDiagnostics(failure, config)
+            throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
+        }
+    }
+
+    override fun streamRound(
+        messages: List<ConversationMessage>,
+        candidateTools: List<ToolDefinition>,
+        steps: List<ModelRoundStep>,
+        languageTag: String?,
+    ): Flow<ModelRoundStreamEvent> = flow {
+        if (messages.isEmpty()) throw LlmSafeException("Пустая беседа.")
+        val settings = try {
+            settingsRepository.settings.first()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (e: Throwable) {
+            emit(ModelRoundStreamEvent.ExposedTools(emptyList()))
+            throw LlmConfigurationException("Настройки не загружены: ${e.message}")
+        }
+        val config = settings.connectionConfig()
+        try {
+            requireTransportAllowed(settings.provider, settings.baseUrl, settings.customAllowInsecureHttp)
+            val apiKey = apiKeyStore.read(settings.provider)
+            val modelId = settings.resolvedModelId()
+            if (modelId.isBlank() || settings.baseUrl.isBlank()) {
+                emit(ModelRoundStreamEvent.ExposedTools(emptyList()))
+                throw LlmConfigurationException("Настрой LLM-провайдера.")
+            }
+            if (settings.provider.requiresApiKey && apiKey.isNullOrBlank()) {
+                emit(ModelRoundStreamEvent.ExposedTools(emptyList()))
+                throw LlmSafeException("API key не сохранён.")
+            }
+            val prompt = buildString {
+                append(systemPrompt())
+                if (!languageTag.isNullOrBlank()) append("\nLikely user language: $languageTag.")
+            }
+
+            // Atomic exposed tool selection for this round
+            val adapter: ProviderSchemaProjector = when (settings.protocol) {
+                LlmProtocol.OpenAiCompatible -> OpenAiToolAdapter(json)
+                LlmProtocol.AnthropicCompatible -> AnthropicToolAdapter(json)
+                LlmProtocol.Gemini -> GeminiToolAdapter(json)
+            }
+            val exposedTools = candidateTools.filter { tool ->
+                when (adapter.project(tool.inputSchema)) {
+                    is ProviderSchemaProjection.Supported,
+                    is ProviderSchemaProjection.LosslesslyProjected -> true
+                    is ProviderSchemaProjection.Unsupported -> false
+                }
+            }
+            emit(ModelRoundStreamEvent.ExposedTools(exposedTools))
+
+            when (settings.protocol) {
+                LlmProtocol.OpenAiCompatible -> {
+                    val openAiAdapter = OpenAiToolAdapter(json)
+                    val toolsArray = openAiAdapter.formatToolsPayload(exposedTools)
+                    val baseMessages = buildList {
+                        add(
+                            buildJsonObject {
+                                put("role", "system")
+                                put("content", prompt)
+                            },
+                        )
+                        messages.forEach { message ->
+                            add(
+                                buildJsonObject {
+                                    put("role", message.role.transport)
+                                    put("content", message.contextText)
+                                },
+                            )
+                        }
+                    }
+                    val stepMessages = openAiAdapter.formatStepMessages(steps)
+                    val payload = buildJsonObject {
+                        put("model", modelId)
+                        put(
+                            "messages",
+                            buildJsonArray {
+                                baseMessages.forEach { add(it) }
+                                stepMessages.forEach { add(it) }
+                            },
+                        )
+                        if (toolsArray.isNotEmpty()) {
+                            put("tools", toolsArray)
+                        }
+                    }
+                    val accumulator = OpenAiStreamAccumulator(json)
+                    openAi.streamPayload(settings.baseUrl, apiKey, payload).collect { chunk ->
+                        accumulator.onChunk(chunk).forEach { emit(it) }
+                    }
+                    emit(accumulator.onFinish())
+                }
+
+                LlmProtocol.AnthropicCompatible -> {
+                    val anthropicAdapter = AnthropicToolAdapter(json)
+                    val toolsArray = anthropicAdapter.formatToolsPayload(exposedTools)
+                    val baseMessages = messages.map { message ->
+                        buildJsonObject {
+                            put("role", message.role.transport)
+                            put("content", message.contextText)
+                        }
+                    }
+                    val stepMessages = anthropicAdapter.formatStepMessages(steps)
+                    val payload = buildJsonObject {
+                        put("model", modelId)
+                        put("max_tokens", 4096)
+                        put("system", prompt)
+                        put(
+                            "messages",
+                            buildJsonArray {
+                                baseMessages.forEach { add(it) }
+                                stepMessages.forEach { add(it) }
+                            },
+                        )
+                        if (toolsArray.isNotEmpty()) {
+                            put("tools", toolsArray)
+                        }
+                    }
+                    val accumulator = AnthropicStreamAccumulator(json)
+                    anthropic.streamPayload(settings.baseUrl, apiKey, payload).collect { chunk ->
+                        accumulator.onChunk(chunk).forEach { emit(it) }
+                    }
+                    emit(accumulator.onFinish())
+                }
+
+                LlmProtocol.Gemini -> {
+                    val geminiAdapter = GeminiToolAdapter(json)
+                    val toolsArray = geminiAdapter.formatToolsPayload(exposedTools)
+                    val baseContents = messages.map { message ->
+                        buildJsonObject {
+                            put("role", if (message.role == ConversationRole.Assistant) "model" else "user")
+                            put(
+                                "parts",
+                                buildJsonArray {
+                                    add(buildJsonObject { put("text", message.contextText) })
+                                },
+                            )
+                        }
+                    }
+                    val stepContents = geminiAdapter.formatStepContents(steps)
+                    val payload = buildJsonObject {
+                        put(
+                            "system_instruction",
+                            buildJsonObject {
+                                put(
+                                    "parts",
+                                    buildJsonArray {
+                                        add(buildJsonObject { put("text", prompt) })
+                                    },
+                                )
+                            },
+                        )
+                        put(
+                            "contents",
+                            buildJsonArray {
+                                baseContents.forEach { add(it) }
+                                stepContents.forEach { add(it) }
+                            },
+                        )
+                        if (toolsArray.isNotEmpty()) {
+                            put("tools", toolsArray)
+                        }
+                    }
+                    val accumulator = GeminiStreamAccumulator(json)
+                    gemini.streamPayload(settings.baseUrl, modelId, apiKey, payload).collect { chunk ->
+                        accumulator.onChunk(chunk).forEach { emit(it) }
+                    }
+                    emit(accumulator.onFinish())
+                }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (malformed: MalformedToolCallStreamException) {
+            logDiagnostics(malformed, config)
+            throw LlmSafeException("Провайдер вернул некорректный ответ: ${malformed.message}")
         } catch (failure: Throwable) {
             logDiagnostics(failure, config)
             throw LlmSafeException(LlmErrorClassifier.userMessage(failure))
