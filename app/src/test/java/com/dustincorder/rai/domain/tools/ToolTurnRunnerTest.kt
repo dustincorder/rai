@@ -6,6 +6,8 @@ import com.dustincorder.rai.domain.RayaEmotion
 import com.dustincorder.rai.domain.RayaResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -56,22 +58,30 @@ class ToolTurnRunnerTest {
     }
 
     private class ScriptedModelInvoker(
-        private val responses: List<ModelRoundResponse>,
+        private val rounds: List<List<ModelRoundStreamEvent>>,
+        private val exposedFilter: (List<ToolDefinition>) -> List<ToolDefinition> = { it },
     ) : ModelTurnInvoker {
         var invocationCount = 0
         val historySteps = mutableListOf<List<ModelRoundStep>>()
+        val exposedToolsSeen = mutableListOf<List<ToolDefinition>>()
 
-        override suspend fun invokeRound(
+        override fun filterExposedTools(tools: List<ToolDefinition>): List<ToolDefinition> = exposedFilter(tools)
+
+        override fun streamRound(
             messages: List<ConversationMessage>,
-            activeTools: List<ToolDefinition>,
+            exposedTools: List<ToolDefinition>,
             steps: List<ModelRoundStep>,
             languageTag: String?,
-        ): ModelRoundResponse {
+        ): Flow<ModelRoundStreamEvent> = flow {
             historySteps.add(steps.toList())
-            if (invocationCount >= responses.size) {
+            exposedToolsSeen.add(exposedTools.toList())
+            if (invocationCount >= rounds.size) {
                 error("No scripted response for round $invocationCount")
             }
-            return responses[invocationCount++]
+            val events = rounds[invocationCount++]
+            for (event in events) {
+                emit(event)
+            }
         }
     }
 
@@ -81,7 +91,9 @@ class ToolTurnRunnerTest {
         val runner = ToolTurnRunner(registry, FakeValidator())
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.FinalReply(RayaResponse("Hello there!", RayaEmotion.Calm, "en-US")),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Hello there!", RayaEmotion.Calm, "en-US")),
+                ),
             ),
         )
 
@@ -117,12 +129,14 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(
-                    listOf(
-                        ToolCall("call_1", "echo", buildJsonObject { put("param", "apple") }),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(ToolCall("call_1", "echo", buildJsonObject { put("param", "apple") })),
                     ),
                 ),
-                ModelRoundResponse.FinalReply(RayaResponse("You got apple", RayaEmotion.Happy, "en-US")),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("You got apple", RayaEmotion.Happy, "en-US")),
+                ),
             ),
         )
 
@@ -141,7 +155,6 @@ class ToolTurnRunnerTest {
         assertEquals(1, tool.callCount)
         assertEquals("apple", tool.receivedArgs?.get("param")?.jsonPrimitive?.content)
 
-        // Check that invoker received tool result feedback in round 2
         val secondRoundSteps = invoker.historySteps[1]
         assertEquals(2, secondRoundSteps.size)
         val feedback = secondRoundSteps[1] as ModelRoundStep.ToolExecutionFeedback
@@ -171,13 +184,17 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(
-                    listOf(
-                        ToolCall("call_a", "tool_a", buildJsonObject { put("param", "1") }),
-                        ToolCall("call_b", "tool_b", buildJsonObject { put("param", "2") }),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("call_a", "tool_a", buildJsonObject { put("param", "1") }),
+                            ToolCall("call_b", "tool_b", buildJsonObject { put("param", "2") }),
+                        ),
                     ),
                 ),
-                ModelRoundResponse.FinalReply(RayaResponse("Both executed", RayaEmotion.Calm)),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Both executed", RayaEmotion.Calm)),
+                ),
             ),
         )
 
@@ -205,9 +222,15 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("param", "step1") }))),
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c2", "t", buildJsonObject { put("param", "step2") }))),
-                ModelRoundResponse.FinalReply(RayaResponse("All done", RayaEmotion.Calm)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("param", "step1") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c2", "t", buildJsonObject { put("param", "step2") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("All done", RayaEmotion.Calm)),
+                ),
             ),
         )
 
@@ -230,8 +253,12 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c_unknown", "non_existent_tool", buildJsonObject {}))),
-                ModelRoundResponse.FinalReply(RayaResponse("I cannot find that tool", RayaEmotion.Confused)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c_unknown", "non_existent_tool", buildJsonObject {}))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("I cannot find that tool", RayaEmotion.Confused)),
+                ),
             ),
         )
 
@@ -247,7 +274,7 @@ class ToolTurnRunnerTest {
         val feedback = secondRoundSteps[1] as ModelRoundStep.ToolExecutionFeedback
         assertEquals("c_unknown", feedback.callId)
         assertEquals("error", feedback.result["status"]?.jsonPrimitive?.content)
-        assertEquals("ValidationFailed", feedback.result["error_kind"]?.jsonPrimitive?.content)
+        assertEquals("PolicyDenied", feedback.result["error_kind"]?.jsonPrimitive?.content)
     }
 
     @Test
@@ -260,8 +287,12 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c_disabled", "disabled", buildJsonObject {}))),
-                ModelRoundResponse.FinalReply(RayaResponse("Tool is disabled", RayaEmotion.Calm)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c_disabled", "disabled", buildJsonObject {}))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Tool is disabled", RayaEmotion.Calm)),
+                ),
             ),
         )
 
@@ -288,8 +319,12 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("wrong", 123) }))),
-                ModelRoundResponse.FinalReply(RayaResponse("Schema invalid", RayaEmotion.Thinking)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("wrong", 123) }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Schema invalid", RayaEmotion.Thinking)),
+                ),
             ),
         )
 
@@ -318,8 +353,12 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c_fail", "fail", buildJsonObject { put("param", "x") }))),
-                ModelRoundResponse.FinalReply(RayaResponse("Tool failed to execute", RayaEmotion.Sad)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c_fail", "fail", buildJsonObject { put("param", "x") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Tool failed to execute", RayaEmotion.Sad)),
+                ),
             ),
         )
 
@@ -352,8 +391,12 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c_hang", "hang", buildJsonObject { put("param", "x") }))),
-                ModelRoundResponse.FinalReply(RayaResponse("Operation timed out", RayaEmotion.Annoyed)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c_hang", "hang", buildJsonObject { put("param", "x") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Operation timed out", RayaEmotion.Annoyed)),
+                ),
             ),
         )
 
@@ -383,11 +426,13 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(
-                    listOf(
-                        ToolCall("c1", "t", buildJsonObject { put("param", "1") }),
-                        ToolCall("c2", "t", buildJsonObject { put("param", "2") }),
-                        ToolCall("c3", "t", buildJsonObject { put("param", "3") }),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("c1", "t", buildJsonObject { put("param", "1") }),
+                            ToolCall("c2", "t", buildJsonObject { put("param", "2") }),
+                            ToolCall("c3", "t", buildJsonObject { put("param", "3") }),
+                        ),
                     ),
                 ),
             ),
@@ -419,8 +464,12 @@ class ToolTurnRunnerTest {
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("param", "1") }))),
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("c2", "t", buildJsonObject { put("param", "2") }))),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "t", buildJsonObject { put("param", "1") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c2", "t", buildJsonObject { put("param", "2") }))),
+                ),
             ),
         )
 
@@ -441,12 +490,12 @@ class ToolTurnRunnerTest {
         val registry = InMemoryToolRegistry()
         val runner = ToolTurnRunner(registry, FakeValidator())
         val invoker = object : ModelTurnInvoker {
-            override suspend fun invokeRound(
+            override fun streamRound(
                 messages: List<ConversationMessage>,
-                activeTools: List<ToolDefinition>,
+                exposedTools: List<ToolDefinition>,
                 steps: List<ModelRoundStep>,
                 languageTag: String?,
-            ): ModelRoundResponse {
+            ): Flow<ModelRoundStreamEvent> = flow {
                 throw CancellationException("Turn cancelled")
             }
         }
@@ -482,7 +531,9 @@ class ToolTurnRunnerTest {
         val args = buildJsonObject { put("param", "important.txt") }
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("call_del", "delete", args))),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("call_del", "delete", args))),
+                ),
             ),
         )
 
@@ -497,7 +548,7 @@ class ToolTurnRunnerTest {
         val confirmation = result as ToolTurnResult.ConfirmationRequired
         assertEquals("delete_file", confirmation.pending.definition.id.value)
         assertEquals("call_del", confirmation.pending.call.callId)
-        assertEquals(0, sensitiveTool.callCount) // Tool must NOT have been executed!
+        assertEquals(0, sensitiveTool.callCount)
 
         val token = confirmation.pending.token
         assertNotNull(token)
@@ -505,45 +556,272 @@ class ToolTurnRunnerTest {
     }
 
     @Test
-    fun `confirmation token allows execution when arguments match`() = runTest {
-        val sensitiveTool = FakeTool(
-            ToolDefinition(
-                id = ToolId("delete_file"),
-                name = "delete",
-                description = "Destructive file delete",
-                effect = ToolEffect.Destructive,
-                executionKind = ExecutionKind.LocalApi,
-                inputSchema = simpleSchema,
-            ),
-        )
-        val registry = InMemoryToolRegistry(listOf(sensitiveTool))
-        val runner = ToolTurnRunner(registry, FakeValidator())
+    fun `batch continuation test A - safe then confirmation then safe`() = runTest {
+        val callOrder = mutableListOf<String>()
+        val safe1 = FakeTool(
+            ToolDefinition(ToolId("safe1"), "safe1", "safe", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("safe1")
+            ToolResult.Success(buildJsonObject { put("r", "1") })
+        }
+        val sensitive = FakeTool(
+            ToolDefinition(ToolId("sens"), "sens", "sensitive", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("sens")
+            ToolResult.Success(buildJsonObject { put("r", "2") })
+        }
+        val safe2 = FakeTool(
+            ToolDefinition(ToolId("safe2"), "safe2", "safe", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("safe2")
+            ToolResult.Success(buildJsonObject { put("r", "3") })
+        }
 
-        val args = buildJsonObject { put("param", "important.txt") }
-        val validToken = ActionConfirmationToken(
-            toolId = ToolId("delete_file"),
-            canonicalArgumentsHash = computeCanonicalArgumentsHash(args),
-            turnEpoch = 1,
-            expiresAtMs = System.currentTimeMillis() + 60_000L,
-        )
+        val registry = InMemoryToolRegistry(listOf(safe1, sensitive, safe2))
+        val runner = ToolTurnRunner(registry, FakeValidator())
 
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("call_del", "delete", args))),
-                ModelRoundResponse.FinalReply(RayaResponse("Deleted successfully", RayaEmotion.Calm)),
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("c1", "safe1", buildJsonObject { put("param", "a") }),
+                            ToolCall("c2", "sens", buildJsonObject { put("param", "b") }),
+                            ToolCall("c3", "safe2", buildJsonObject { put("param", "c") }),
+                        ),
+                    ),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("All three completed", RayaEmotion.Calm)),
+                ),
             ),
         )
 
-        val result = runner.runTurn(
-            messages = listOf(ConversationMessage(ConversationRole.User, "delete important.txt")),
+        // 1. Initial turn pauses on sens (c2)
+        val initialResult = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run all")),
             turnEpoch = 1,
             languageTag = null,
             modelInvoker = invoker,
-            confirmationToken = validToken,
         )
 
-        assertTrue(result is ToolTurnResult.Completed)
-        assertEquals(1, sensitiveTool.callCount)
+        assertTrue(initialResult is ToolTurnResult.ConfirmationRequired)
+        val pending = (initialResult as ToolTurnResult.ConfirmationRequired).pending
+        assertEquals("sens", pending.call.toolName)
+        assertEquals(listOf("safe1"), callOrder)
+        assertEquals(1, pending.remainingCallsInBatch.size)
+        assertEquals("safe2", pending.remainingCallsInBatch[0].toolName)
+        assertEquals(1, pending.currentBatchFeedbacks.size)
+        assertEquals("c1", pending.currentBatchFeedbacks[0].callId)
+
+        // 2. Resume with approval token
+        val resumeResult = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run all")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+
+        assertTrue(resumeResult is ToolTurnResult.Completed)
+        assertEquals(listOf("safe1", "sens", "safe2"), callOrder)
+        val completed = resumeResult as ToolTurnResult.Completed
+        assertEquals(3, completed.executedCalls.size)
+
+        // 3. Provider history before round 2 has exactly one feedback per call ID
+        val round2Steps = invoker.historySteps[1]
+        assertEquals(4, round2Steps.size)
+        val feedbackIds = round2Steps.filterIsInstance<ModelRoundStep.ToolExecutionFeedback>().map { it.callId }
+        assertEquals(listOf("c1", "c2", "c3"), feedbackIds)
+    }
+
+    @Test
+    fun `batch continuation test B - confirmation then safe`() = runTest {
+        val callOrder = mutableListOf<String>()
+        val sens = FakeTool(
+            ToolDefinition(ToolId("sens"), "sens", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("sens")
+            ToolResult.Success(buildJsonObject {})
+        }
+        val safe = FakeTool(
+            ToolDefinition(ToolId("safe"), "safe", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("safe")
+            ToolResult.Success(buildJsonObject {})
+        }
+        val registry = InMemoryToolRegistry(listOf(sens, safe))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("c1", "sens", buildJsonObject { put("param", "1") }),
+                            ToolCall("c2", "safe", buildJsonObject { put("param", "2") }),
+                        ),
+                    ),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm)),
+                ),
+            ),
+        )
+
+        val result1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "go")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (result1 as ToolTurnResult.ConfirmationRequired).pending
+        assertEquals("sens", pending.call.toolName)
+        assertEquals(emptyList<String>(), callOrder)
+
+        val result2 = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "go")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = pending.token,
+        )
+
+        assertTrue(result2 is ToolTurnResult.Completed)
+        assertEquals(listOf("sens", "safe"), callOrder)
+    }
+
+    @Test
+    fun `batch continuation test C - safe then confirmation then confirmation`() = runTest {
+        val callOrder = mutableListOf<String>()
+        val safe = FakeTool(
+            ToolDefinition(ToolId("safe"), "safe", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("safe")
+            ToolResult.Success(buildJsonObject {})
+        }
+        val sens1 = FakeTool(
+            ToolDefinition(ToolId("sens1"), "sens1", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("sens1")
+            ToolResult.Success(buildJsonObject {})
+        }
+        val sens2 = FakeTool(
+            ToolDefinition(ToolId("sens2"), "sens2", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        ) {
+            callOrder.add("sens2")
+            ToolResult.Success(buildJsonObject {})
+        }
+        val registry = InMemoryToolRegistry(listOf(safe, sens1, sens2))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("c1", "safe", buildJsonObject { put("param", "1") }),
+                            ToolCall("c2", "sens1", buildJsonObject { put("param", "2") }),
+                            ToolCall("c3", "sens2", buildJsonObject { put("param", "3") }),
+                        ),
+                    ),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm)),
+                ),
+            ),
+        )
+
+        val res1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(res1 is ToolTurnResult.ConfirmationRequired)
+        val pending1 = (res1 as ToolTurnResult.ConfirmationRequired).pending
+        assertEquals("sens1", pending1.call.toolName)
+        assertEquals(listOf("safe"), callOrder)
+
+        val res2 = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending1,
+            confirmationToken = pending1.token,
+        )
+        assertTrue(res2 is ToolTurnResult.ConfirmationRequired)
+        val pending2 = (res2 as ToolTurnResult.ConfirmationRequired).pending
+        assertEquals("sens2", pending2.call.toolName)
+        assertEquals(listOf("safe", "sens1"), callOrder)
+
+        val res3 = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "run")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending2,
+            confirmationToken = pending2.token,
+        )
+        assertTrue(res3 is ToolTurnResult.Completed)
+        assertEquals(listOf("safe", "sens1", "sens2"), callOrder)
+    }
+
+    @Test
+    fun `confirmation token is strictly single-use`() = runTest {
+        val sens = FakeTool(
+            ToolDefinition(ToolId("sens"), "sens", "desc", ToolEffect.Destructive, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(sens))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "sens", buildJsonObject { put("param", "x") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm)),
+                ),
+            ),
+        )
+
+        val res1 = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "go")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+        assertTrue(res1 is ToolTurnResult.ConfirmationRequired)
+        val pending = (res1 as ToolTurnResult.ConfirmationRequired).pending
+        val token = pending.token
+
+        val res2 = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "go")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = token,
+        )
+        assertTrue(res2 is ToolTurnResult.Completed)
+        assertEquals(1, sens.callCount)
+
+        val replayRes = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "go")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+            pending = pending,
+            confirmationToken = token,
+        )
+        assertTrue(replayRes is ToolTurnResult.Failed)
+        assertEquals(1, sens.callCount)
     }
 
     @Test
@@ -573,23 +851,229 @@ class ToolTurnRunnerTest {
 
         assertFalse(tokenForOriginal.isValidFor(ToolId("delete_file"), tamperedArgs, 1, System.currentTimeMillis()))
 
+        val pending = PendingToolConfirmation(
+            token = tokenForOriginal,
+            call = ToolCall("call_del", "delete", tamperedArgs),
+            definition = sensitiveTool.definition,
+        )
+
+        val result = runner.resumeConfirmedTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "delete tampered")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = ScriptedModelInvoker(emptyList()),
+            pending = pending,
+            confirmationToken = tokenForOriginal,
+        )
+
+        assertTrue(result is ToolTurnResult.Failed)
+        assertEquals(0, sensitiveTool.callCount)
+    }
+
+    @Test
+    fun `streaming deltas flow when active registry and model returns ordinary text`() = runTest {
+        val tool = FakeTool(
+            ToolDefinition(ToolId("t"), "t", "desc", ToolEffect.ReadOnly, ExecutionKind.LocalApi, simpleSchema),
+        )
+        val registry = InMemoryToolRegistry(listOf(tool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val streamedDeltas = mutableListOf<String>()
         val invoker = ScriptedModelInvoker(
             listOf(
-                ModelRoundResponse.ToolCalls(listOf(ToolCall("call_del", "delete", tamperedArgs))),
+                listOf(
+                    ModelRoundStreamEvent.TextDelta("Hello "),
+                    ModelRoundStreamEvent.TextDelta("world!"),
+                    ModelRoundStreamEvent.Completed(RayaResponse("Hello world!", RayaEmotion.Calm)),
+                ),
             ),
         )
 
         val result = runner.runTurn(
-            messages = listOf(ConversationMessage(ConversationRole.User, "delete tampered")),
+            messages = listOf(ConversationMessage(ConversationRole.User, "hi")),
             turnEpoch = 1,
             languageTag = null,
             modelInvoker = invoker,
-            confirmationToken = tokenForOriginal,
+            onTextDelta = { streamedDeltas.add(it) },
         )
 
-        // Must require confirmation again because arguments were tampered!
-        assertTrue(result is ToolTurnResult.ConfirmationRequired)
-        assertEquals(0, sensitiveTool.callCount)
+        assertTrue(result is ToolTurnResult.Completed)
+        assertEquals(listOf("Hello ", "world!"), streamedDeltas)
+        assertEquals("Hello world!", (result as ToolTurnResult.Completed).response.text)
+        assertEquals(0, tool.callCount)
+    }
+
+    @Test
+    fun `all requested tool calls count against total call budget`() = runTest {
+        val registry = InMemoryToolRegistry()
+        val runner = ToolTurnRunner(registry, FakeValidator(), budget = ToolLoopBudget(maxTotalToolCalls = 2))
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(
+                        listOf(
+                            ToolCall("c1", "unknown1", buildJsonObject {}),
+                            ToolCall("c2", "unknown2", buildJsonObject {}),
+                            ToolCall("c3", "unknown3", buildJsonObject {}),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "call 3")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Failed)
+        val failed = result as ToolTurnResult.Failed
+        assertTrue(failed.error is ToolTurnError.CallBudgetExceeded)
+    }
+
+    @Test
+    fun `output schema validation succeeds for valid result`() = runTest {
+        val outputSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("result_code", buildJsonObject { put("type", "integer") })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("result_code")) })
+        }
+        val toolDef = ToolDefinition(
+            id = ToolId("calc"),
+            name = "calc",
+            description = "desc",
+            effect = ToolEffect.ReadOnly,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = simpleSchema,
+            outputSchema = outputSchema,
+        )
+        val tool = FakeTool(toolDef) {
+            ToolResult.Success(buildJsonObject { put("result_code", 100) })
+        }
+        val registry = InMemoryToolRegistry(listOf(tool))
+        val runner = ToolTurnRunner(registry, FakeValidator(valid = true))
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "calc", buildJsonObject { put("param", "x") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Done", RayaEmotion.Calm)),
+                ),
+            ),
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "calc")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Completed)
+        val feedback = invoker.historySteps[1][1] as ModelRoundStep.ToolExecutionFeedback
+        assertEquals(100, feedback.result["result_code"]?.jsonPrimitive?.content?.toInt())
+    }
+
+    @Test
+    fun `output schema validation fails and converts to typed execution error`() = runTest {
+        val outputSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("result_code", buildJsonObject { put("type", "integer") })
+            })
+        }
+        val toolDef = ToolDefinition(
+            id = ToolId("calc"),
+            name = "calc",
+            description = "desc",
+            effect = ToolEffect.ReadOnly,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = simpleSchema,
+            outputSchema = outputSchema,
+        )
+        val tool = FakeTool(toolDef) {
+            ToolResult.Success(buildJsonObject { put("secret_key", "secret") })
+        }
+        val validator = object : JsonSchemaValidator {
+            override fun validate(schema: kotlinx.serialization.json.JsonObject, instance: kotlinx.serialization.json.JsonElement): SchemaValidationResult {
+                if (schema == outputSchema) {
+                    return SchemaValidationResult.Invalid(listOf(SchemaValidationError("/result_code", "Missing required field")))
+                }
+                return SchemaValidationResult.Valid
+            }
+        }
+        val registry = InMemoryToolRegistry(listOf(tool))
+        val runner = ToolTurnRunner(registry, validator)
+
+        val invoker = ScriptedModelInvoker(
+            listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "calc", buildJsonObject { put("param", "x") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Error handled", RayaEmotion.Calm)),
+                ),
+            ),
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "calc")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Completed)
+        val feedback = invoker.historySteps[1][1] as ModelRoundStep.ToolExecutionFeedback
+        assertEquals("error", feedback.result["status"]?.jsonPrimitive?.content)
+        assertEquals("ExecutionFailed", feedback.result["error_kind"]?.jsonPrimitive?.content)
+        assertFalse("Secret data must not be sent to model", feedback.result.containsKey("secret_key"))
+    }
+
+    @Test
+    fun `unsupported schema tool is omitted and fails closed if called`() = runTest {
+        val toolDef = ToolDefinition(
+            id = ToolId("omitted_tool"),
+            name = "omitted",
+            description = "desc",
+            effect = ToolEffect.ReadOnly,
+            executionKind = ExecutionKind.LocalApi,
+            inputSchema = simpleSchema,
+        )
+        val tool = FakeTool(toolDef)
+        val registry = InMemoryToolRegistry(listOf(tool))
+        val runner = ToolTurnRunner(registry, FakeValidator())
+
+        val invoker = ScriptedModelInvoker(
+            rounds = listOf(
+                listOf(
+                    ModelRoundStreamEvent.ToolCalls(listOf(ToolCall("c1", "omitted", buildJsonObject { put("param", "x") }))),
+                ),
+                listOf(
+                    ModelRoundStreamEvent.Completed(RayaResponse("Refused", RayaEmotion.Calm)),
+                ),
+            ),
+            exposedFilter = { emptyList() },
+        )
+
+        val result = runner.runTurn(
+            messages = listOf(ConversationMessage(ConversationRole.User, "call")),
+            turnEpoch = 1,
+            languageTag = null,
+            modelInvoker = invoker,
+        )
+
+        assertTrue(result is ToolTurnResult.Completed)
+        assertEquals(0, tool.callCount)
+        val feedback = invoker.historySteps[1][1] as ModelRoundStep.ToolExecutionFeedback
+        assertEquals("PolicyDenied", feedback.result["error_kind"]?.jsonPrimitive?.content)
     }
 
     @Test

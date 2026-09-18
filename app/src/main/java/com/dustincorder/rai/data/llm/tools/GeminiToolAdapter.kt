@@ -5,6 +5,7 @@ import com.dustincorder.rai.domain.tools.ProviderSchemaProjection
 import com.dustincorder.rai.domain.tools.ProviderSchemaProjector
 import com.dustincorder.rai.domain.tools.ToolCall
 import com.dustincorder.rai.domain.tools.ToolDefinition
+import com.dustincorder.rai.domain.tools.findForbiddenKeyword
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -20,8 +21,38 @@ class GeminiToolAdapter(
 ) : ProviderSchemaProjector {
 
     override fun project(schema: JsonObject): ProviderSchemaProjection {
-        // Gemini supports OpenAPI 3.0 schemas for function parameters
-        return ProviderSchemaProjection.Supported(schema)
+        val rootType = schema["type"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
+        if (rootType != "object") {
+            return ProviderSchemaProjection.Unsupported("Gemini functionDeclarations require root schema type to be 'object'")
+        }
+
+        val forbidden = setOf(
+            "oneOf",
+            "anyOf",
+            "allOf",
+            "not",
+            "\$ref",
+            "\$defs",
+            "definitions",
+            "additionalProperties",
+            "patternProperties",
+            "if",
+            "then",
+            "else",
+        )
+        val foundForbidden = schema.findForbiddenKeyword(forbidden)
+        if (foundForbidden != null) {
+            return ProviderSchemaProjection.Unsupported("Gemini functionDeclarations do not support: '$foundForbidden'")
+        }
+
+        return if (schema.containsKey("\$schema")) {
+            val stripped = buildJsonObject {
+                schema.entries.filterNot { it.key == "\$schema" }.forEach { (k, v) -> put(k, v) }
+            }
+            ProviderSchemaProjection.LosslesslyProjected(stripped, "Stripped root \$schema")
+        } else {
+            ProviderSchemaProjection.Supported(schema)
+        }
     }
 
     /**
@@ -77,22 +108,30 @@ class GeminiToolAdapter(
         val content = firstCandidate["content"]?.jsonObject ?: return emptyList()
         val parts = content["parts"]?.jsonArray ?: return emptyList()
 
-        return parts.mapNotNull { partElement ->
-            runCatching {
-                val part = partElement.jsonObject
-                val functionCall = part["functionCall"]?.jsonObject ?: return@mapNotNull null
-                val name = functionCall["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                val args = functionCall["args"]?.jsonObject ?: buildJsonObject {}
-                val callId = functionCall["id"]?.jsonPrimitive?.content ?: "gemini_call_${name}"
+        val calls = mutableListOf<ToolCall>()
+        val seenIds = mutableSetOf<String>()
 
+        parts.forEachIndexed { index, partElement ->
+            val part = runCatching { partElement.jsonObject }.getOrNull() ?: return@forEachIndexed
+            val functionCall = part["functionCall"]?.jsonObject ?: return@forEachIndexed
+            val name = functionCall["name"]?.jsonPrimitive?.content ?: return@forEachIndexed
+            val args = functionCall["args"]?.jsonObject ?: buildJsonObject {}
+            val callId = functionCall["id"]?.jsonPrimitive?.content ?: "gemini_call_${name}_$index"
+
+            if (!seenIds.add(callId)) {
+                throw IllegalArgumentException("Обнаружен дубликат callId '$callId' в ответе Gemini.")
+            }
+
+            calls.add(
                 ToolCall(
                     callId = callId,
                     toolName = name,
                     arguments = args,
                     providerCorrelation = callId,
                 )
-            }.getOrNull()
+            )
         }
+        return calls
     }
 
     /**

@@ -2,24 +2,28 @@ package com.dustincorder.rai.domain.tools
 
 import com.dustincorder.rai.domain.ConversationMessage
 import com.dustincorder.rai.domain.RayaResponse
+import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.JsonObject
 
 /**
  * Invoker abstraction enabling ToolTurnRunner to execute multi-round model turns
- * with 0..N tool calls and tool result feedback.
+ * with streaming deltas, 0..N tool calls, and tool result feedback.
  */
 interface ModelTurnInvoker {
-    suspend fun invokeRound(
+    fun filterExposedTools(tools: List<ToolDefinition>): List<ToolDefinition> = tools
+
+    fun streamRound(
         messages: List<ConversationMessage>,
-        activeTools: List<ToolDefinition>,
+        exposedTools: List<ToolDefinition>,
         steps: List<ModelRoundStep>,
         languageTag: String?,
-    ): ModelRoundResponse
+    ): Flow<ModelRoundStreamEvent>
 }
 
-sealed interface ModelRoundResponse {
-    data class FinalReply(val response: RayaResponse) : ModelRoundResponse
-    data class ToolCalls(val calls: List<ToolCall>) : ModelRoundResponse
+sealed interface ModelRoundStreamEvent {
+    data class TextDelta(val text: String) : ModelRoundStreamEvent
+    data class ToolCalls(val calls: List<ToolCall>) : ModelRoundStreamEvent
+    data class Completed(val response: RayaResponse) : ModelRoundStreamEvent
 }
 
 sealed interface ModelRoundStep {

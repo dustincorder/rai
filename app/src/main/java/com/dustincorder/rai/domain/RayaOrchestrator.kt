@@ -115,6 +115,7 @@ class RayaOrchestrator(
         val languageTag: String? = null
         markUserTurnIntent()
         textTurnInFlight = true
+        turnEpoch++
         _pendingToolConfirmation.value = null
         scope.launch {
             try {
@@ -125,11 +126,21 @@ class RayaOrchestrator(
                 try {
                     val activeTools = toolRegistry?.activeTools().orEmpty()
                     val response = if (toolTurnRunner != null && activeTools.isNotEmpty() && replyProvider is ModelTurnInvoker) {
+                        var firstToken = true
+                        val startedAt = now()
                         when (val turnResult = toolTurnRunner.runTurn(
                             messages = conversationContext(),
                             turnEpoch = currentEpoch,
                             languageTag = languageTag,
                             modelInvoker = replyProvider,
+                            onTextDelta = { delta ->
+                                if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                                if (firstToken) {
+                                    firstToken = false
+                                    record("llm.firstTokenMs=${now() - startedAt}")
+                                }
+                                _streamingText.value += delta
+                            },
                         )) {
                             is ToolTurnResult.Completed -> turnResult.response
                             is ToolTurnResult.ConfirmationRequired -> {
@@ -187,6 +198,8 @@ class RayaOrchestrator(
                 val currentEpoch = turnEpoch
                 try {
                     val response = if (toolTurnRunner != null && replyProvider is ModelTurnInvoker) {
+                        var firstToken = true
+                        val startedAt = now()
                         when (val turnResult = toolTurnRunner.resumeConfirmedTurn(
                             messages = conversationContext(),
                             turnEpoch = currentEpoch,
@@ -194,6 +207,14 @@ class RayaOrchestrator(
                             modelInvoker = replyProvider,
                             pending = pending,
                             confirmationToken = token,
+                            onTextDelta = { delta ->
+                                if (_voiceSessionActive.value || !textTurnInFlight) throw StaleTurn()
+                                if (firstToken) {
+                                    firstToken = false
+                                    record("llm.firstTokenMs=${now() - startedAt}")
+                                }
+                                _streamingText.value += delta
+                            },
                         )) {
                             is ToolTurnResult.Completed -> turnResult.response
                             is ToolTurnResult.ConfirmationRequired -> {
@@ -238,6 +259,7 @@ class RayaOrchestrator(
     }
 
     fun rejectPendingTool() {
+        turnEpoch++
         _pendingToolConfirmation.value = null
     }
 
@@ -393,6 +415,7 @@ class RayaOrchestrator(
     fun clearConversation() {
         if (_voiceSessionActive.value) return
         if (textTurnInFlight) return
+        turnEpoch++
         _pendingToolConfirmation.value = null
         _conversation.value = emptyList()
         _semanticEmotion.value = RayaEmotion.Calm
@@ -403,6 +426,7 @@ class RayaOrchestrator(
 
     override fun replaceConversation(messages: List<ConversationMessage>): Boolean {
         if (_voiceSessionActive.value || textTurnInFlight) return false
+        turnEpoch++
         _pendingToolConfirmation.value = null
         _conversation.value = messages
         _semanticEmotion.value = RayaEmotion.Calm
@@ -556,11 +580,21 @@ class RayaOrchestrator(
                 _streamingText.value = ""
                 val activeTools = toolRegistry?.activeTools().orEmpty()
                 if (toolTurnRunner != null && activeTools.isNotEmpty() && replyProvider is ModelTurnInvoker) {
+                    var firstToken = true
+                    val startedAt = now()
                     when (val turnResult = toolTurnRunner.runTurn(
                         messages = conversationContext(),
                         turnEpoch = epoch,
                         languageTag = resolvedLanguageTag,
                         modelInvoker = replyProvider,
+                        onTextDelta = { delta ->
+                            if (isStaleEpoch(epoch, "replyDelta")) throw StaleTurn()
+                            if (firstToken) {
+                                firstToken = false
+                                record("voice.llmFirstTokenMs=${now() - startedAt} epoch=$epoch")
+                            }
+                            _streamingText.value += delta
+                        },
                     )) {
                         is ToolTurnResult.Completed -> turnResult.response
                         is ToolTurnResult.ConfirmationRequired -> {
@@ -668,8 +702,8 @@ class RayaOrchestrator(
 
     private fun endVoiceSessionInternal(notice: Boolean, reason: String) {
         val wasActive = _voiceSessionActive.value
-        turnEpoch++
         if (reason != "confirmationRequired") {
+            turnEpoch++
             _pendingToolConfirmation.value = null
         }
         sessionJob?.cancel()

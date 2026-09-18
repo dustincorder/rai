@@ -5,6 +5,8 @@ import com.dustincorder.rai.domain.tools.ProviderSchemaProjection
 import com.dustincorder.rai.domain.tools.ProviderSchemaProjector
 import com.dustincorder.rai.domain.tools.ToolCall
 import com.dustincorder.rai.domain.tools.ToolDefinition
+import com.dustincorder.rai.domain.tools.findAllRefValues
+import com.dustincorder.rai.domain.tools.findForbiddenKeyword
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -20,8 +22,35 @@ class AnthropicToolAdapter(
 ) : ProviderSchemaProjector {
 
     override fun project(schema: JsonObject): ProviderSchemaProjection {
-        // Anthropic natively supports JSON Schema in input_schema
-        return ProviderSchemaProjection.Supported(schema)
+        val rootType = schema["type"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
+        if (rootType != "object") {
+            return ProviderSchemaProjection.Unsupported("Anthropic tools require root schema type to be 'object'")
+        }
+
+        val forbidden = setOf("patternProperties", "unevaluatedProperties", "if", "then", "else")
+        val foundForbidden = schema.findForbiddenKeyword(forbidden)
+        if (foundForbidden != null) {
+            return ProviderSchemaProjection.Unsupported("Anthropic tools do not support '$foundForbidden'")
+        }
+
+        val refs = schema.findAllRefValues()
+        for (ref in refs) {
+            if (ref.startsWith("http://") || ref.startsWith("https://")) {
+                return ProviderSchemaProjection.Unsupported("Anthropic tools do not support external \$ref '$ref'")
+            }
+            if (!ref.startsWith("#/\$defs/") && !ref.startsWith("#/definitions/")) {
+                return ProviderSchemaProjection.Unsupported("Anthropic tools do not support unresolvable \$ref '$ref'")
+            }
+        }
+
+        return if (schema.containsKey("\$schema")) {
+            val stripped = buildJsonObject {
+                schema.entries.filterNot { it.key == "\$schema" }.forEach { (k, v) -> put(k, v) }
+            }
+            ProviderSchemaProjection.LosslesslyProjected(stripped, "Stripped root \$schema")
+        } else {
+            ProviderSchemaProjection.Supported(schema)
+        }
     }
 
     /**
@@ -61,7 +90,7 @@ class AnthropicToolAdapter(
      * [{"type": "tool_use", "id": "...", "name": "...", "input": {...}}]
      */
     fun parseToolCalls(contentArray: JsonArray): List<ToolCall> {
-        return contentArray.mapNotNull { item ->
+        val calls = contentArray.mapNotNull { item ->
             runCatching {
                 val block = item.jsonObject
                 if (block["type"]?.jsonPrimitive?.content != "tool_use") return@mapNotNull null
@@ -77,6 +106,14 @@ class AnthropicToolAdapter(
                 )
             }.getOrNull()
         }
+
+        val seenIds = mutableSetOf<String>()
+        for (call in calls) {
+            if (!seenIds.add(call.callId)) {
+                throw IllegalArgumentException("Обнаружен дубликат callId '${call.callId}' в ответе Anthropic.")
+            }
+        }
+        return calls
     }
 
     /**

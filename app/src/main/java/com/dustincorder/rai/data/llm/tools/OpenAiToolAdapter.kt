@@ -5,6 +5,8 @@ import com.dustincorder.rai.domain.tools.ProviderSchemaProjection
 import com.dustincorder.rai.domain.tools.ProviderSchemaProjector
 import com.dustincorder.rai.domain.tools.ToolCall
 import com.dustincorder.rai.domain.tools.ToolDefinition
+import com.dustincorder.rai.domain.tools.findAllRefValues
+import com.dustincorder.rai.domain.tools.findForbiddenKeyword
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -21,8 +23,35 @@ class OpenAiToolAdapter(
 ) : ProviderSchemaProjector {
 
     override fun project(schema: JsonObject): ProviderSchemaProjection {
-        // OpenAI natively accepts JSON Schema for function parameters
-        return ProviderSchemaProjection.Supported(schema)
+        val rootType = schema["type"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
+        if (rootType != "object") {
+            return ProviderSchemaProjection.Unsupported("OpenAI function schemas require root schema type to be 'object'")
+        }
+
+        val forbidden = setOf("patternProperties", "unevaluatedProperties", "if", "then", "else", "not")
+        val foundForbidden = schema.findForbiddenKeyword(forbidden)
+        if (foundForbidden != null) {
+            return ProviderSchemaProjection.Unsupported("OpenAI function schemas do not support '$foundForbidden'")
+        }
+
+        val refs = schema.findAllRefValues()
+        for (ref in refs) {
+            if (ref.startsWith("http://") || ref.startsWith("https://")) {
+                return ProviderSchemaProjection.Unsupported("OpenAI function schemas do not support external \$ref '$ref'")
+            }
+            if (!ref.startsWith("#/\$defs/") && !ref.startsWith("#/definitions/")) {
+                return ProviderSchemaProjection.Unsupported("OpenAI function schemas do not support unresolvable \$ref '$ref'")
+            }
+        }
+
+        return if (schema.containsKey("\$schema")) {
+            val stripped = buildJsonObject {
+                schema.entries.filterNot { it.key == "\$schema" }.forEach { (k, v) -> put(k, v) }
+            }
+            ProviderSchemaProjection.LosslesslyProjected(stripped, "Stripped root \$schema")
+        } else {
+            ProviderSchemaProjection.Supported(schema)
+        }
     }
 
     /**
@@ -77,7 +106,7 @@ class OpenAiToolAdapter(
         val toolCallsElement = messageObject["tool_calls"] ?: return emptyList()
         val toolCallsArray = runCatching { toolCallsElement.jsonArray }.getOrNull() ?: return emptyList()
 
-        return toolCallsArray.mapNotNull { item ->
+        val calls = toolCallsArray.mapNotNull { item ->
             runCatching {
                 val callObj = item.jsonObject
                 val id = callObj["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
@@ -95,6 +124,14 @@ class OpenAiToolAdapter(
                 )
             }.getOrNull()
         }
+
+        val seenIds = mutableSetOf<String>()
+        for (call in calls) {
+            if (!seenIds.add(call.callId)) {
+                throw IllegalArgumentException("Обнаружен дубликат callId '${call.callId}' в ответе OpenAI.")
+            }
+        }
+        return calls
     }
 
     /**

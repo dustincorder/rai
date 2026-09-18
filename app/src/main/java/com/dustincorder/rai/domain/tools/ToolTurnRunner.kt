@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.concurrent.ConcurrentHashMap
 
 data class ToolLoopBudget(
     val maxModelRounds: Int = 3,
@@ -22,10 +23,12 @@ data class ToolLoopBudget(
 sealed interface ToolTurnResult {
     data class Completed(
         val response: RayaResponse,
-        val executedCalls: List<ExecutedToolCallSnapshot>,
+        val executedCalls: List<ExecutedToolCallSnapshot> = emptyList(),
     ) : ToolTurnResult
 
-    data class ConfirmationRequired(val pending: PendingToolConfirmation) : ToolTurnResult
+    data class ConfirmationRequired(
+        val pending: PendingToolConfirmation,
+    ) : ToolTurnResult
 
     data class Failed(val error: ToolTurnError) : ToolTurnResult
 }
@@ -46,6 +49,9 @@ data class PendingToolConfirmation(
     val steps: List<ModelRoundStep> = emptyList(),
     val executedCalls: List<ExecutedToolCallSnapshot> = emptyList(),
     val round: Int = 1,
+    val remainingCallsInBatch: List<ToolCall> = emptyList(),
+    val currentBatchFeedbacks: List<ModelRoundStep.ToolExecutionFeedback> = emptyList(),
+    val totalCallsRequested: Int = 0,
 )
 
 sealed interface ToolTurnError {
@@ -63,18 +69,20 @@ class ToolTurnRunner(
     private val budget: ToolLoopBudget = ToolLoopBudget(),
     private val now: () -> Long = { System.currentTimeMillis() },
 ) {
+    private val consumedTokenIds = ConcurrentHashMap.newKeySet<String>()
+
     suspend fun runTurn(
         messages: List<ConversationMessage>,
         turnEpoch: Int,
         languageTag: String?,
         modelInvoker: ModelTurnInvoker,
-        confirmationToken: ActionConfirmationToken? = null,
+        onTextDelta: suspend (String) -> Unit = {},
     ): ToolTurnResult {
         val startedAt = now()
         val steps = mutableListOf<ModelRoundStep>()
         val executedSnapshots = mutableListOf<ExecutedToolCallSnapshot>()
         var round = 0
-        var totalCallsExecuted = 0
+        var totalCallsRequested = 0
 
         try {
             return withTimeout(budget.wholeTurnTimeoutMs) {
@@ -83,8 +91,25 @@ class ToolTurnRunner(
                     round++
 
                     val activeTools = registry.activeTools().map { it.definition }
-                    val response = try {
-                        modelInvoker.invokeRound(messages, activeTools, steps, languageTag)
+                    val exposedTools = modelInvoker.filterExposedTools(activeTools)
+
+                    var stepCompletedResponse: RayaResponse? = null
+                    var stepToolCalls: List<ToolCall>? = null
+
+                    try {
+                        modelInvoker.streamRound(messages, exposedTools, steps, languageTag).collect { event ->
+                            when (event) {
+                                is ModelRoundStreamEvent.TextDelta -> {
+                                    onTextDelta(event.text)
+                                }
+                                is ModelRoundStreamEvent.ToolCalls -> {
+                                    stepToolCalls = event.calls
+                                }
+                                is ModelRoundStreamEvent.Completed -> {
+                                    stepCompletedResponse = event.response
+                                }
+                            }
+                        }
                     } catch (cancellation: CancellationException) {
                         throw cancellation
                     } catch (failure: Throwable) {
@@ -93,135 +118,67 @@ class ToolTurnRunner(
                         )
                     }
 
-                    when (response) {
-                        is ModelRoundResponse.FinalReply -> {
-                            return@withTimeout ToolTurnResult.Completed(response.response, executedSnapshots)
+                    if (stepCompletedResponse != null && stepToolCalls.isNullOrEmpty()) {
+                        return@withTimeout ToolTurnResult.Completed(stepCompletedResponse!!, executedSnapshots)
+                    }
+
+                    val calls = stepToolCalls.orEmpty()
+                    if (calls.isEmpty()) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.ModelError("Model returned empty tool calls list without reply")
+                        )
+                    }
+
+                    val duplicateCallId = calls.groupBy { it.callId }.filter { it.value.size > 1 }.keys.firstOrNull()
+                    if (duplicateCallId != null) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.ModelError("Обнаружен дубликат callId '$duplicateCallId' в одном раунде модели.")
+                        )
+                    }
+
+                    steps.add(ModelRoundStep.AssistantToolCalls(calls))
+                    val batchFeedbacks = mutableListOf<ModelRoundStep.ToolExecutionFeedback>()
+
+                    for (index in calls.indices) {
+                        currentCoroutineContext().ensureActive()
+                        val call = calls[index]
+                        totalCallsRequested++
+                        if (totalCallsRequested > budget.maxTotalToolCalls) {
+                            return@withTimeout ToolTurnResult.Failed(
+                                ToolTurnError.CallBudgetExceeded(totalCallsRequested)
+                            )
                         }
 
-                        is ModelRoundResponse.ToolCalls -> {
-                            val calls = response.calls
-                            if (calls.isEmpty()) {
-                                return@withTimeout ToolTurnResult.Failed(
-                                    ToolTurnError.ModelError("Model returned empty tool calls list without reply")
-                                )
+                        val executionOutcome = processCall(
+                            call = call,
+                            exposedTools = exposedTools,
+                            turnEpoch = turnEpoch,
+                            executedSnapshots = executedSnapshots,
+                        )
+
+                        when (executionOutcome) {
+                            is CallProcessOutcome.Feedback -> {
+                                batchFeedbacks.add(executionOutcome.feedback)
                             }
-
-                            if (totalCallsExecuted + calls.size > budget.maxTotalToolCalls) {
-                                return@withTimeout ToolTurnResult.Failed(
-                                    ToolTurnError.CallBudgetExceeded(totalCallsExecuted + calls.size)
+                            is CallProcessOutcome.ConfirmationNeeded -> {
+                                return@withTimeout ToolTurnResult.ConfirmationRequired(
+                                    PendingToolConfirmation(
+                                        token = executionOutcome.token,
+                                        call = call,
+                                        definition = executionOutcome.definition,
+                                        steps = steps.toList(),
+                                        executedCalls = executedSnapshots.toList(),
+                                        round = round,
+                                        remainingCallsInBatch = calls.subList(index + 1, calls.size),
+                                        currentBatchFeedbacks = batchFeedbacks.toList(),
+                                        totalCallsRequested = totalCallsRequested,
+                                    )
                                 )
-                            }
-
-                            steps.add(ModelRoundStep.AssistantToolCalls(calls))
-
-                            // Sequential execution of model tool calls
-                            for (call in calls) {
-                                currentCoroutineContext().ensureActive()
-                                val tool = registry.get(call.toolName)
-
-                                if (tool == null) {
-                                    val errorResult = ToolResult.Error(
-                                        ToolErrorKind.ValidationFailed,
-                                        "Неизвестный инструмент: '${call.toolName}'"
-                                    )
-                                    val projected = projector.project(errorResult, budget.maxResultBytes)
-                                    steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected))
-                                    continue
-                                }
-
-                                if (!tool.definition.enabled) {
-                                    val errorResult = ToolResult.Error(
-                                        ToolErrorKind.PolicyDenied,
-                                        "Инструмент '${call.toolName}' отключён политикой."
-                                    )
-                                    val projected = projector.project(errorResult, budget.maxResultBytes)
-                                    steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected))
-                                    continue
-                                }
-
-                                // Schema validation before execution
-                                val validation = schemaValidator.validate(tool.definition.inputSchema, call.arguments)
-                                if (validation is SchemaValidationResult.Invalid) {
-                                    val errorsSummary = validation.errors.joinToString("; ") { "${it.path}: ${it.error}" }
-                                    val errorResult = ToolResult.Error(
-                                        ToolErrorKind.ValidationFailed,
-                                        "Аргументы не соответствуют JSON Schema: $errorsSummary"
-                                    )
-                                    val projected = projector.project(errorResult, budget.maxResultBytes)
-                                    steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected))
-                                    continue
-                                }
-
-                                // Preflight security policy check BEFORE execution
-                                val policyDecision = securityPolicy.evaluate(
-                                    tool = tool.definition,
-                                    arguments = call.arguments,
-                                    turnEpoch = turnEpoch,
-                                    confirmationToken = confirmationToken,
-                                )
-
-                                when (policyDecision) {
-                                    is ToolPolicyDecision.Deny -> {
-                                        val errorResult = ToolResult.Error(
-                                            ToolErrorKind.PolicyDenied,
-                                            "Действие отклонено политикой безопасности: ${policyDecision.reason}"
-                                        )
-                                        val projected = projector.project(errorResult, budget.maxResultBytes)
-                                        steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected))
-                                    }
-
-                                    is ToolPolicyDecision.RequiresConfirmation -> {
-                                        // Stop execution immediately; surface confirmation to orchestrator
-                                        return@withTimeout ToolTurnResult.ConfirmationRequired(
-                                            PendingToolConfirmation(
-                                                token = policyDecision.token,
-                                                call = call,
-                                                definition = tool.definition,
-                                                steps = steps.toList(),
-                                                executedCalls = executedSnapshots.toList(),
-                                                round = round,
-                                            )
-                                        )
-                                    }
-
-                                    is ToolPolicyDecision.Allow -> {
-                                        // Execute tool with per-tool timeout
-                                        val execResult = try {
-                                            withTimeout(budget.perToolTimeoutMs) {
-                                                tool.execute(call.arguments)
-                                            }
-                                        } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
-                                            ToolResult.Error(
-                                                ToolErrorKind.Timeout,
-                                                "Превышено время ожидания выполнения инструмента (${budget.perToolTimeoutMs}мс)."
-                                            )
-                                        } catch (cancellation: CancellationException) {
-                                            throw cancellation
-                                        } catch (failure: Throwable) {
-                                            ToolResult.Error(
-                                                ToolErrorKind.ExecutionFailed,
-                                                "Ошибка при выполнении: ${failure.message ?: failure::class.java.simpleName}"
-                                            )
-                                        }
-
-                                        totalCallsExecuted++
-                                        executedSnapshots.add(
-                                            ExecutedToolCallSnapshot(
-                                                callId = call.callId,
-                                                toolId = tool.definition.id,
-                                                toolName = tool.definition.name,
-                                                success = execResult is ToolResult.Success,
-                                                timestamp = now(),
-                                            )
-                                        )
-
-                                        val projected = projector.project(execResult, budget.maxResultBytes)
-                                        steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected))
-                                    }
-                                }
                             }
                         }
                     }
+
+                    steps.addAll(batchFeedbacks)
                 }
 
                 ToolTurnResult.Failed(ToolTurnError.RoundBudgetExceeded(round))
@@ -240,12 +197,17 @@ class ToolTurnRunner(
         modelInvoker: ModelTurnInvoker,
         pending: PendingToolConfirmation,
         confirmationToken: ActionConfirmationToken,
+        onTextDelta: suspend (String) -> Unit = {},
     ): ToolTurnResult {
         val startedAt = now()
         val steps = pending.steps.toMutableList()
         val executedSnapshots = pending.executedCalls.toMutableList()
         var round = pending.round
-        var totalCallsExecuted = executedSnapshots.size
+        var totalCallsRequested = pending.totalCallsRequested
+
+        if (!consumedTokenIds.add(confirmationToken.tokenId)) {
+            return ToolTurnResult.Failed(ToolTurnError.ModelError("Действие отклонено: токен подтверждения уже был использован."))
+        }
 
         if (!confirmationToken.isValidFor(pending.definition.id, pending.call.arguments, turnEpoch, now())) {
             return ToolTurnResult.Failed(ToolTurnError.ModelError("Действие отклонено: недействительный токен подтверждения."))
@@ -258,46 +220,97 @@ class ToolTurnRunner(
                 )
 
                 // Execute the confirmed tool
-                val execResult = try {
-                    withTimeout(budget.perToolTimeoutMs) {
-                        tool.execute(pending.call.arguments)
-                    }
-                } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
-                    ToolResult.Error(
-                        ToolErrorKind.Timeout,
-                        "Превышено время ожидания выполнения инструмента (${budget.perToolTimeoutMs}мс)."
-                    )
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (failure: Throwable) {
-                    ToolResult.Error(
-                        ToolErrorKind.ExecutionFailed,
-                        "Ошибка при выполнении: ${failure.message ?: failure::class.java.simpleName}"
-                    )
-                }
-
-                totalCallsExecuted++
+                val confirmedResult = executeToolWithValidation(tool, pending.call)
                 executedSnapshots.add(
                     ExecutedToolCallSnapshot(
                         callId = pending.call.callId,
                         toolId = tool.definition.id,
                         toolName = tool.definition.name,
-                        success = execResult is ToolResult.Success,
+                        success = confirmedResult is ToolResult.Success,
                         timestamp = now(),
                     )
                 )
+                val confirmedProjected = projector.project(confirmedResult, budget.maxResultBytes)
+                val batchFeedbacks = pending.currentBatchFeedbacks.toMutableList()
+                batchFeedbacks.add(
+                    ModelRoundStep.ToolExecutionFeedback(
+                        pending.call.callId,
+                        pending.call.toolName,
+                        confirmedProjected,
+                    )
+                )
 
-                val projected = projector.project(execResult, budget.maxResultBytes)
-                steps.add(ModelRoundStep.ToolExecutionFeedback(pending.call.callId, pending.call.toolName, projected))
+                val activeTools = registry.activeTools().map { it.definition }
+                val exposedTools = modelInvoker.filterExposedTools(activeTools)
 
-                // Continue loop
+                // Process any remaining calls from the paused batch
+                val remaining = pending.remainingCallsInBatch
+                for (index in remaining.indices) {
+                    currentCoroutineContext().ensureActive()
+                    val call = remaining[index]
+                    totalCallsRequested++
+                    if (totalCallsRequested > budget.maxTotalToolCalls) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.CallBudgetExceeded(totalCallsRequested)
+                        )
+                    }
+
+                    val outcome = processCall(
+                        call = call,
+                        exposedTools = exposedTools,
+                        turnEpoch = turnEpoch,
+                        executedSnapshots = executedSnapshots,
+                    )
+
+                    when (outcome) {
+                        is CallProcessOutcome.Feedback -> {
+                            batchFeedbacks.add(outcome.feedback)
+                        }
+                        is CallProcessOutcome.ConfirmationNeeded -> {
+                            return@withTimeout ToolTurnResult.ConfirmationRequired(
+                                PendingToolConfirmation(
+                                    token = outcome.token,
+                                    call = call,
+                                    definition = outcome.definition,
+                                    steps = steps.toList(),
+                                    executedCalls = executedSnapshots.toList(),
+                                    round = round,
+                                    remainingCallsInBatch = remaining.subList(index + 1, remaining.size),
+                                    currentBatchFeedbacks = batchFeedbacks.toList(),
+                                    totalCallsRequested = totalCallsRequested,
+                                )
+                            )
+                        }
+                    }
+                }
+
+                steps.addAll(batchFeedbacks)
+
+                // Continue multi-round loop
                 while (round < budget.maxModelRounds) {
                     currentCoroutineContext().ensureActive()
                     round++
 
-                    val activeTools = registry.activeTools().map { it.definition }
-                    val response = try {
-                        modelInvoker.invokeRound(messages, activeTools, steps, languageTag)
+                    val currentActive = registry.activeTools().map { it.definition }
+                    val currentExposed = modelInvoker.filterExposedTools(currentActive)
+
+                    var stepCompletedResponse: RayaResponse? = null
+                    var stepToolCalls: List<ToolCall>? = null
+
+                    try {
+                        modelInvoker.streamRound(messages, currentExposed, steps, languageTag).collect { event ->
+                            when (event) {
+                                is ModelRoundStreamEvent.TextDelta -> {
+                                    onTextDelta(event.text)
+                                }
+                                is ModelRoundStreamEvent.ToolCalls -> {
+                                    stepToolCalls = event.calls
+                                }
+                                is ModelRoundStreamEvent.Completed -> {
+                                    stepCompletedResponse = event.response
+                                }
+                            }
+                        }
                     } catch (cancellation: CancellationException) {
                         throw cancellation
                     } catch (failure: Throwable) {
@@ -306,98 +319,67 @@ class ToolTurnRunner(
                         )
                     }
 
-                    when (response) {
-                        is ModelRoundResponse.FinalReply -> {
-                            return@withTimeout ToolTurnResult.Completed(response.response, executedSnapshots)
+                    if (stepCompletedResponse != null && stepToolCalls.isNullOrEmpty()) {
+                        return@withTimeout ToolTurnResult.Completed(stepCompletedResponse!!, executedSnapshots)
+                    }
+
+                    val calls = stepToolCalls.orEmpty()
+                    if (calls.isEmpty()) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.ModelError("Model returned empty tool calls list without reply")
+                        )
+                    }
+
+                    val duplicateCallId = calls.groupBy { it.callId }.filter { it.value.size > 1 }.keys.firstOrNull()
+                    if (duplicateCallId != null) {
+                        return@withTimeout ToolTurnResult.Failed(
+                            ToolTurnError.ModelError("Обнаружен дубликат callId '$duplicateCallId' в одном раунде модели.")
+                        )
+                    }
+
+                    steps.add(ModelRoundStep.AssistantToolCalls(calls))
+                    val nextBatchFeedbacks = mutableListOf<ModelRoundStep.ToolExecutionFeedback>()
+
+                    for (index in calls.indices) {
+                        currentCoroutineContext().ensureActive()
+                        val call = calls[index]
+                        totalCallsRequested++
+                        if (totalCallsRequested > budget.maxTotalToolCalls) {
+                            return@withTimeout ToolTurnResult.Failed(
+                                ToolTurnError.CallBudgetExceeded(totalCallsRequested)
+                            )
                         }
 
-                        is ModelRoundResponse.ToolCalls -> {
-                            val calls = response.calls
-                            if (calls.isEmpty()) {
-                                return@withTimeout ToolTurnResult.Failed(
-                                    ToolTurnError.ModelError("Model returned empty tool calls list without reply")
-                                )
+                        val executionOutcome = processCall(
+                            call = call,
+                            exposedTools = currentExposed,
+                            turnEpoch = turnEpoch,
+                            executedSnapshots = executedSnapshots,
+                        )
+
+                        when (executionOutcome) {
+                            is CallProcessOutcome.Feedback -> {
+                                nextBatchFeedbacks.add(executionOutcome.feedback)
                             }
-
-                            if (totalCallsExecuted + calls.size > budget.maxTotalToolCalls) {
-                                return@withTimeout ToolTurnResult.Failed(
-                                    ToolTurnError.CallBudgetExceeded(totalCallsExecuted + calls.size)
+                            is CallProcessOutcome.ConfirmationNeeded -> {
+                                return@withTimeout ToolTurnResult.ConfirmationRequired(
+                                    PendingToolConfirmation(
+                                        token = executionOutcome.token,
+                                        call = call,
+                                        definition = executionOutcome.definition,
+                                        steps = steps.toList(),
+                                        executedCalls = executedSnapshots.toList(),
+                                        round = round,
+                                        remainingCallsInBatch = calls.subList(index + 1, calls.size),
+                                        currentBatchFeedbacks = nextBatchFeedbacks.toList(),
+                                        totalCallsRequested = totalCallsRequested,
+                                    )
                                 )
-                            }
-
-                            steps.add(ModelRoundStep.AssistantToolCalls(calls))
-
-                            for (call in calls) {
-                                currentCoroutineContext().ensureActive()
-                                val nextTool = registry.get(call.toolName)
-
-                                if (nextTool == null) {
-                                    val err = ToolResult.Error(ToolErrorKind.ValidationFailed, "Неизвестный инструмент: '${call.toolName}'")
-                                    steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projector.project(err, budget.maxResultBytes)))
-                                    continue
-                                }
-
-                                if (!nextTool.definition.enabled) {
-                                    val err = ToolResult.Error(ToolErrorKind.PolicyDenied, "Инструмент '${call.toolName}' отключён.")
-                                    steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projector.project(err, budget.maxResultBytes)))
-                                    continue
-                                }
-
-                                val valRes = schemaValidator.validate(nextTool.definition.inputSchema, call.arguments)
-                                if (valRes is SchemaValidationResult.Invalid) {
-                                    val errors = valRes.errors.joinToString("; ") { "${it.path}: ${it.error}" }
-                                    val err = ToolResult.Error(ToolErrorKind.ValidationFailed, "Аргументы не соответствуют JSON Schema: $errors")
-                                    steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projector.project(err, budget.maxResultBytes)))
-                                    continue
-                                }
-
-                                val decision = securityPolicy.evaluate(nextTool.definition, call.arguments, turnEpoch, null)
-                                when (decision) {
-                                    is ToolPolicyDecision.Deny -> {
-                                        val err = ToolResult.Error(ToolErrorKind.PolicyDenied, "Отклонено: ${decision.reason}")
-                                        steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projector.project(err, budget.maxResultBytes)))
-                                    }
-
-                                    is ToolPolicyDecision.RequiresConfirmation -> {
-                                        return@withTimeout ToolTurnResult.ConfirmationRequired(
-                                            PendingToolConfirmation(
-                                                token = decision.token,
-                                                call = call,
-                                                definition = nextTool.definition,
-                                                steps = steps.toList(),
-                                                executedCalls = executedSnapshots.toList(),
-                                                round = round,
-                                            )
-                                        )
-                                    }
-
-                                    is ToolPolicyDecision.Allow -> {
-                                        val subExec = try {
-                                            withTimeout(budget.perToolTimeoutMs) { nextTool.execute(call.arguments) }
-                                        } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
-                                            ToolResult.Error(ToolErrorKind.Timeout, "Превышено время ожидания.")
-                                        } catch (cancellation: CancellationException) {
-                                            throw cancellation
-                                        } catch (failure: Throwable) {
-                                            ToolResult.Error(ToolErrorKind.ExecutionFailed, "Ошибка: ${failure.message}")
-                                        }
-
-                                        totalCallsExecuted++
-                                        executedSnapshots.add(
-                                            ExecutedToolCallSnapshot(
-                                                callId = call.callId,
-                                                toolId = nextTool.definition.id,
-                                                toolName = nextTool.definition.name,
-                                                success = subExec is ToolResult.Success,
-                                                timestamp = now(),
-                                            )
-                                        )
-                                        steps.add(ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projector.project(subExec, budget.maxResultBytes)))
-                                    }
-                                }
                             }
                         }
                     }
+
+                    steps.addAll(nextBatchFeedbacks)
                 }
 
                 ToolTurnResult.Failed(ToolTurnError.RoundBudgetExceeded(round))
@@ -407,5 +389,137 @@ class ToolTurnRunner(
         } catch (cancellation: CancellationException) {
             throw cancellation
         }
+    }
+
+    private sealed interface CallProcessOutcome {
+        data class Feedback(val feedback: ModelRoundStep.ToolExecutionFeedback) : CallProcessOutcome
+        data class ConfirmationNeeded(val token: ActionConfirmationToken, val definition: ToolDefinition) : CallProcessOutcome
+    }
+
+    private suspend fun processCall(
+        call: ToolCall,
+        exposedTools: List<ToolDefinition>,
+        turnEpoch: Int,
+        executedSnapshots: MutableList<ExecutedToolCallSnapshot>,
+    ): CallProcessOutcome {
+        val exposed = exposedTools.firstOrNull { it.name == call.toolName }
+        if (exposed == null) {
+            val errorResult = ToolResult.Error(
+                ToolErrorKind.PolicyDenied,
+                "Инструмент '${call.toolName}' не был предоставлен модели в этом раунде."
+            )
+            val projected = projector.project(errorResult, budget.maxResultBytes)
+            return CallProcessOutcome.Feedback(
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+            )
+        }
+
+        val tool = registry.get(call.toolName)
+        if (tool == null) {
+            val errorResult = ToolResult.Error(
+                ToolErrorKind.PolicyDenied,
+                "Инструмент '${call.toolName}' не найден в реестре."
+            )
+            val projected = projector.project(errorResult, budget.maxResultBytes)
+            return CallProcessOutcome.Feedback(
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+            )
+        }
+
+        if (!tool.definition.enabled) {
+            val errorResult = ToolResult.Error(
+                ToolErrorKind.PolicyDenied,
+                "Инструмент '${call.toolName}' отключён политикой."
+            )
+            val projected = projector.project(errorResult, budget.maxResultBytes)
+            return CallProcessOutcome.Feedback(
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+            )
+        }
+
+        val validation = schemaValidator.validate(tool.definition.inputSchema, call.arguments)
+        if (validation is SchemaValidationResult.Invalid) {
+            val errorsSummary = validation.errors.joinToString("; ") { "${it.path}: ${it.error}" }
+            val errorResult = ToolResult.Error(
+                ToolErrorKind.ValidationFailed,
+                "Аргументы не соответствуют JSON Schema: $errorsSummary"
+            )
+            val projected = projector.project(errorResult, budget.maxResultBytes)
+            return CallProcessOutcome.Feedback(
+                ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+            )
+        }
+
+        val policyDecision = securityPolicy.evaluate(
+            tool = tool.definition,
+            arguments = call.arguments,
+            turnEpoch = turnEpoch,
+            confirmationToken = null,
+        )
+
+        return when (policyDecision) {
+            is ToolPolicyDecision.Deny -> {
+                val errorResult = ToolResult.Error(
+                    ToolErrorKind.PolicyDenied,
+                    "Действие отклонено политикой безопасности: ${policyDecision.reason}"
+                )
+                val projected = projector.project(errorResult, budget.maxResultBytes)
+                CallProcessOutcome.Feedback(
+                    ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                )
+            }
+            is ToolPolicyDecision.RequiresConfirmation -> {
+                CallProcessOutcome.ConfirmationNeeded(policyDecision.token, tool.definition)
+            }
+            is ToolPolicyDecision.Allow -> {
+                val execResult = executeToolWithValidation(tool, call)
+                executedSnapshots.add(
+                    ExecutedToolCallSnapshot(
+                        callId = call.callId,
+                        toolId = tool.definition.id,
+                        toolName = tool.definition.name,
+                        success = execResult is ToolResult.Success,
+                        timestamp = now(),
+                    )
+                )
+                val projected = projector.project(execResult, budget.maxResultBytes)
+                CallProcessOutcome.Feedback(
+                    ModelRoundStep.ToolExecutionFeedback(call.callId, call.toolName, projected)
+                )
+            }
+        }
+    }
+
+    private suspend fun executeToolWithValidation(tool: RayaTool, call: ToolCall): ToolResult {
+        val rawResult = try {
+            withTimeout(budget.perToolTimeoutMs) {
+                tool.execute(call.arguments)
+            }
+        } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+            ToolResult.Error(
+                ToolErrorKind.Timeout,
+                "Превышено время ожидания выполнения инструмента (${budget.perToolTimeoutMs}мс)."
+            )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            ToolResult.Error(
+                ToolErrorKind.ExecutionFailed,
+                "Ошибка при выполнении: ${failure.message ?: failure::class.java.simpleName}"
+            )
+        }
+
+        if (rawResult is ToolResult.Success && tool.definition.outputSchema != null) {
+            val outValidation = schemaValidator.validate(tool.definition.outputSchema!!, rawResult.data)
+            if (outValidation is SchemaValidationResult.Invalid) {
+                val errors = outValidation.errors.joinToString("; ") { "${it.path}: ${it.error}" }
+                return ToolResult.Error(
+                    ToolErrorKind.ExecutionFailed,
+                    "Результат выполнения не соответствует выходной схеме: $errors"
+                )
+            }
+        }
+
+        return rawResult
     }
 }

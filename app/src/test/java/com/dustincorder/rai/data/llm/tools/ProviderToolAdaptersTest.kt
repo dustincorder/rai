@@ -242,4 +242,245 @@ class ProviderToolAdaptersTest {
         assertTrue(anthropicAdapter.formatToolsPayload(listOf(disabledTool)).isEmpty())
         assertTrue(geminiAdapter.formatToolsPayload(listOf(disabledTool)).isEmpty())
     }
+
+    @Test
+    fun `gemini generates unique synthetic call IDs for same-name function calls without id`() {
+        val candidates = buildJsonArray {
+            add(buildJsonObject {
+                put("content", buildJsonObject {
+                    put("role", "model")
+                    put("parts", buildJsonArray {
+                        add(buildJsonObject {
+                            put("functionCall", buildJsonObject {
+                                put("name", "weather_tool")
+                                put("args", buildJsonObject { put("city", "Paris") })
+                            })
+                        })
+                        add(buildJsonObject {
+                            put("functionCall", buildJsonObject {
+                                put("name", "weather_tool")
+                                put("args", buildJsonObject { put("city", "London") })
+                            })
+                        })
+                    })
+                })
+            })
+        }
+
+        val parsed = geminiAdapter.parseToolCalls(candidates)
+        assertEquals(2, parsed.size)
+        assertEquals("gemini_call_weather_tool_0", parsed[0].callId)
+        assertEquals("gemini_call_weather_tool_1", parsed[1].callId)
+        assertEquals("Paris", parsed[0].arguments["city"]?.jsonPrimitive?.content)
+        assertEquals("London", parsed[1].arguments["city"]?.jsonPrimitive?.content)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `gemini fails closed on duplicate call IDs in single batch`() {
+        val candidates = buildJsonArray {
+            add(buildJsonObject {
+                put("content", buildJsonObject {
+                    put("role", "model")
+                    put("parts", buildJsonArray {
+                        add(buildJsonObject {
+                            put("functionCall", buildJsonObject {
+                                put("id", "dup_id")
+                                put("name", "tool_a")
+                                put("args", buildJsonObject {})
+                            })
+                        })
+                        add(buildJsonObject {
+                            put("functionCall", buildJsonObject {
+                                put("id", "dup_id")
+                                put("name", "tool_b")
+                                put("args", buildJsonObject {})
+                            })
+                        })
+                    })
+                })
+            })
+        }
+        geminiAdapter.parseToolCalls(candidates)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `openai fails closed on duplicate call IDs in single batch`() {
+        val msg = buildJsonObject {
+            put("role", "assistant")
+            put("tool_calls", buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "same_id")
+                    put("type", "function")
+                    put("function", buildJsonObject {
+                        put("name", "tool_1")
+                        put("arguments", "{}")
+                    })
+                })
+                add(buildJsonObject {
+                    put("id", "same_id")
+                    put("type", "function")
+                    put("function", buildJsonObject {
+                        put("name", "tool_2")
+                        put("arguments", "{}")
+                    })
+                })
+            })
+        }
+        openAiAdapter.parseToolCalls(msg)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `anthropic fails closed on duplicate call IDs in single batch`() {
+        val content = buildJsonArray {
+            add(buildJsonObject {
+                put("type", "tool_use")
+                put("id", "same_id")
+                put("name", "tool_1")
+                put("input", buildJsonObject {})
+            })
+            add(buildJsonObject {
+                put("type", "tool_use")
+                put("id", "same_id")
+                put("name", "tool_2")
+                put("input", buildJsonObject {})
+            })
+        }
+        anthropicAdapter.parseToolCalls(content)
+    }
+
+    @Test
+    fun `nested objects and array schemas are supported across providers`() {
+        val complexSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("user", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("name", buildJsonObject { put("type", "string") })
+                        put("roles", buildJsonObject {
+                            put("type", "array")
+                            put("items", buildJsonObject { put("type", "string") })
+                        })
+                    })
+                })
+            })
+        }
+
+        assertTrue(openAiAdapter.project(complexSchema) is ProviderSchemaProjection.Supported)
+        assertTrue(anthropicAdapter.project(complexSchema) is ProviderSchemaProjection.Supported)
+        assertTrue(geminiAdapter.project(complexSchema) is ProviderSchemaProjection.Supported)
+    }
+
+    @Test
+    fun `enum schemas are supported across providers`() {
+        val enumSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("status", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        add(JsonPrimitive("pending"))
+                        add(JsonPrimitive("active"))
+                        add(JsonPrimitive("completed"))
+                    })
+                })
+            })
+        }
+
+        assertTrue(openAiAdapter.project(enumSchema) is ProviderSchemaProjection.Supported)
+        assertTrue(anthropicAdapter.project(enumSchema) is ProviderSchemaProjection.Supported)
+        assertTrue(geminiAdapter.project(enumSchema) is ProviderSchemaProjection.Supported)
+    }
+
+    @Test
+    fun `additionalProperties is unsupported in Gemini but supported in OpenAI`() {
+        val schemaWithAdditional = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("key", buildJsonObject { put("type", "string") })
+            })
+            put("additionalProperties", JsonPrimitive(false))
+        }
+
+        assertTrue(openAiAdapter.project(schemaWithAdditional) is ProviderSchemaProjection.Supported)
+        val geminiProj = geminiAdapter.project(schemaWithAdditional)
+        assertTrue("Gemini must mark additionalProperties as Unsupported", geminiProj is ProviderSchemaProjection.Unsupported)
+    }
+
+    @Test
+    fun `oneOf and anyOf are unsupported in Gemini but supported in Anthropic`() {
+        val schemaWithOneOf = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("contact", buildJsonObject {
+                    put("oneOf", buildJsonArray {
+                        add(buildJsonObject { put("type", "string") })
+                        add(buildJsonObject { put("type", "integer") })
+                    })
+                })
+            })
+        }
+
+        val geminiProj = geminiAdapter.project(schemaWithOneOf)
+        assertTrue("Gemini must reject oneOf as Unsupported", geminiProj is ProviderSchemaProjection.Unsupported)
+
+        val anthropicProj = anthropicAdapter.project(schemaWithOneOf)
+        assertTrue("Anthropic must support oneOf", anthropicProj is ProviderSchemaProjection.Supported)
+    }
+
+    @Test
+    fun `defs and local ref are supported in Anthropic and OpenAI but unsupported in Gemini`() {
+        val schemaWithDefs = buildJsonObject {
+            put("type", "object")
+            put("\$defs", buildJsonObject {
+                put("Address", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("city", buildJsonObject { put("type", "string") })
+                    })
+                })
+            })
+            put("properties", buildJsonObject {
+                put("home", buildJsonObject {
+                    put("\$ref", JsonPrimitive("#/\$defs/Address"))
+                })
+            })
+        }
+
+        val geminiProj = geminiAdapter.project(schemaWithDefs)
+        assertTrue("Gemini must reject \$defs/\$ref", geminiProj is ProviderSchemaProjection.Unsupported)
+
+        val openAiProj = openAiAdapter.project(schemaWithDefs)
+        assertTrue("OpenAI must support internal \$defs/\$ref", openAiProj is ProviderSchemaProjection.Supported)
+
+        val anthropicProj = anthropicAdapter.project(schemaWithDefs)
+        assertTrue("Anthropic must support internal \$defs/\$ref", anthropicProj is ProviderSchemaProjection.Supported)
+    }
+
+    @Test
+    fun `external unresolvable ref is unsupported in all providers`() {
+        val externalRefSchema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("data", buildJsonObject {
+                    put("\$ref", JsonPrimitive("https://schema.example.com/item.json"))
+                })
+            })
+        }
+
+        assertTrue(openAiAdapter.project(externalRefSchema) is ProviderSchemaProjection.Unsupported)
+        assertTrue(anthropicAdapter.project(externalRefSchema) is ProviderSchemaProjection.Unsupported)
+        assertTrue(geminiAdapter.project(externalRefSchema) is ProviderSchemaProjection.Unsupported)
+    }
+
+    @Test
+    fun `non-object root schema is unsupported in Anthropic and OpenAI`() {
+        val stringRoot = buildJsonObject {
+            put("type", "string")
+        }
+
+        assertTrue(openAiAdapter.project(stringRoot) is ProviderSchemaProjection.Unsupported)
+        assertTrue(anthropicAdapter.project(stringRoot) is ProviderSchemaProjection.Unsupported)
+        assertTrue(geminiAdapter.project(stringRoot) is ProviderSchemaProjection.Unsupported)
+    }
 }
