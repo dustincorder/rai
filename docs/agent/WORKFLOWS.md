@@ -34,9 +34,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Debug and release (or differently signed) APKs cannot update each other:
-a signature mismatch means uninstall first. Android backup/restore may
-bring app data back after reinstall, so uninstall is NOT a guaranteed clean
-onboarding state. For clean local app data without reinstall:
+a signature mismatch means uninstall first. Raya intentionally disables
+Android backup/restore (`android:allowBackup="false"` with full domain
+exclusions in backup rules), preventing stale preferences, onboarding state,
+or chat history from being restored across reinstalls.
+
+For a deterministic clean local app state during development/testing:
 
 ```sh
 adb shell pm clear com.dustincorder.rai
